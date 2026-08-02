@@ -1,0 +1,129 @@
+html,
+body {
+    height: 100%;
+    overflow: hidden;
+    color: #fff;
+    background: #203040;
+}
+
+.ai-companion {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    background: linear-gradient(180deg, #263b4d 0%, #1d2d3a 100%);
+}
+
+.ai-companion-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    min-height: 58px;
+    padding: 9px 12px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.ai-companion-title {
+    font-size: 1rem;
+    font-weight: 700;
+}
+
+.ai-companion-character {
+    max-width: 260px;
+    overflow: hidden;
+    color: #5cb85c;
+    font-size: 0.72rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ai-companion-status {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 180px;
+    color: rgba(255, 255, 255, 0.72);
+    font-size: 0.72rem;
+    text-align: right;
+}
+
+.ai-companion-status-dot {
+    flex: 0 0 auto;
+    width: 9px;
+    height: 9px;
+    background: #8695a4;
+    border-radius: 50%;
+}
+
+.ai-companion-status[data-status='connected'] .ai-companion-status-dot {
+    background: #5cb85c;
+    box-shadow: 0 0 8px rgba(92, 184, 92, 0.85);
+}
+
+.ai-companion-status[data-status='connecting'] .ai-companion-status-dot,
+.ai-companion-status[data-status='reconnecting'] .ai-companion-status-dot {
+    background: #f0ad4e;
+}
+
+.ai-companion-status[data-status='error'] .ai-companion-status-dot {
+    background: #d9534f;
+}
+
+.ai-companion-transcript {
+    padding: 10px 12px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.ai-companion-transcript .ai-transcript-text {
+    min-height: 48px;
+    max-height: 110px;
+}
+
+#ai-companion-cost {
+    color: rgba(255, 255, 255, 0.5);
+    font-size: 0.65rem;
+    text-transform: none;
+}
+
+.ai-companion-suggestions {
+    min-height: 0;
+    flex: 1;
+    padding: 10px 12px;
+    overflow-y: auto;
+}
+
+.ai-companion .button.ai-suggestion {
+    min-height: 58px;
+    height: auto;
+}
+
+.ai-companion .ai-suggestion-text {
+    -webkit-line-clamp: 3;
+}
+
+.ai-companion-footer {
+    padding: 7px 12px;
+    color: rgba(255, 255, 255, 0.48);
+    font-size: 0.64rem;
+    text-align: center;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+@media (max-height: 520px) {
+    .ai-companion-header {
+        min-height: 46px;
+    }
+
+    .ai-companion-transcript {
+        padding-top: 6px;
+        padding-bottom: 6px;
+    }
+
+    .ai-companion-transcript .ai-transcript-text {
+        min-height: 34px;
+        max-height: 62px;
+    }
+
+    .ai-companion .button.ai-suggestion {
+        min-height: 44px;
+    }
+}

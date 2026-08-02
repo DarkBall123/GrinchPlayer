@@ -9,7 +9,7 @@
 	},
 	"scripts": {
 		"postinstall": "electron-builder install-app-deps",
-		"check": "node --check index.js && node --check custom.js && node --check config.js && node --check ai-core.js && node --check ai-memory.js && node --check ai-service.js && node --check ai-renderer.js && node --check ai-audio-utils.mjs && node --check ai-audio-worklet.mjs && node --check vendor/howler.js",
+		"check": "node --check index.js && node --check custom.js && node --check config.js && node --check ai-core.js && node --check ai-memory.js && node --check ai-service.js && node --check ai-renderer.js && node --check ai-companion.js && node --check ai-audio-utils.mjs && node --check ai-audio-worklet.mjs && node --check vendor/howler.js",
 		"lint": "eslint .",
 		"test": "npm run check && node --test && npm run lint",
 		"start": "electron .",

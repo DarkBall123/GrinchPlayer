@@ -34,7 +34,10 @@ aiService.register(ipcMain);
 
 // Prevent variables from being garbage collected
 let mainWindow;
+let aiCompanionWindow;
+let aiCompanionSnapshot = null;
 const bounds = config.get('bounds') || {};
+let aiCompanionBounds = config.get('aiCompanionBounds') || {};
 const closeReady = new WeakSet();
 const closeTimers = new WeakMap();
 
@@ -84,6 +87,97 @@ ipcMain.on('window:close-ready', function (event) {
     }
     closeReady.add(win);
     win.close();
+});
+
+function sendCompanionVisibility(visible) {
+    if (mainWindow && !mainWindow.webContents.isDestroyed()) {
+        mainWindow.webContents.send('ai:companion:visibility', visible);
+    }
+}
+
+function sendCompanionSnapshot() {
+    if (aiCompanionWindow && !aiCompanionWindow.isDestroyed() && aiCompanionSnapshot) {
+        aiCompanionWindow.webContents.send('ai:companion:update', aiCompanionSnapshot);
+    }
+}
+
+async function createAiCompanionWindow() {
+    if (aiCompanionWindow && !aiCompanionWindow.isDestroyed()) {
+        aiCompanionWindow.show();
+        aiCompanionWindow.focus();
+        return aiCompanionWindow;
+    }
+
+    const win = new BrowserWindow({
+        title: 'GrinchPlayer — AI-подсказки',
+        parent: mainWindow,
+        show: false,
+        autoHideMenuBar: true,
+        icon: path.join(__dirname, 'static/icon-64.png'),
+        width: 480,
+        height: 640,
+        minWidth: 360,
+        minHeight: 420,
+        backgroundColor: '#203040',
+        webPreferences: {
+            nodeIntegration: true,
+            contextIsolation: false
+        }
+    });
+    aiCompanionWindow = win;
+
+    if (boundsAreVisible(aiCompanionBounds)) {
+        win.setBounds(aiCompanionBounds);
+    }
+
+    win.on('ready-to-show', function () {
+        win.show();
+        sendCompanionVisibility(true);
+        sendCompanionSnapshot();
+    });
+    win.on('close', function () {
+        aiCompanionBounds = win.getBounds();
+        config.set('aiCompanionBounds', aiCompanionBounds);
+    });
+    win.on('closed', function () {
+        aiCompanionWindow = undefined;
+        sendCompanionVisibility(false);
+    });
+
+    await win.loadFile(path.join(__dirname, 'ai-companion.html'));
+    return win;
+}
+
+ipcMain.on('ai:companion:open', function (event) {
+    if (!mainWindow || event.sender !== mainWindow.webContents) {
+        return;
+    }
+    createAiCompanionWindow().catch(function (error) {
+        console.error('Unable to open AI companion window.', error);
+    });
+});
+
+ipcMain.on('ai:companion:snapshot', function (event, snapshot) {
+    if (!mainWindow || event.sender !== mainWindow.webContents) {
+        return;
+    }
+    aiCompanionSnapshot = snapshot;
+    sendCompanionSnapshot();
+});
+
+ipcMain.on('ai:companion:ready', function (event) {
+    if (aiCompanionWindow && event.sender === aiCompanionWindow.webContents) {
+        sendCompanionVisibility(true);
+        sendCompanionSnapshot();
+    }
+});
+
+ipcMain.on('ai:companion:play', function (event, hash) {
+    if (!aiCompanionWindow || event.sender !== aiCompanionWindow.webContents ||
+        !mainWindow || mainWindow.webContents.isDestroyed()) {
+        return;
+    }
+    mainWindow.webContents.send('ai:companion:play', String(hash || '').slice(0, 200));
 });
 
 function boundsAreVisible(savedBounds) {
@@ -142,6 +236,9 @@ const createMainWindow = async () => {
     });
 
     win.on('closed', () => {
+        if (aiCompanionWindow && !aiCompanionWindow.isDestroyed()) {
+            aiCompanionWindow.close();
+        }
         // Dereference the window
         // For multiple windows store them in an array
         mainWindow = undefined;

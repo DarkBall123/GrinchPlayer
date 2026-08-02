@@ -75,8 +75,11 @@ class AiController {
         this.billingElapsedMs = 0;
         this.billingTimer = null;
         this.lastStatus = 'stopped';
+        this.companionOpen = false;
 
         this.onAiEvent = (event, payload) => this.handleAiEvent(payload);
+        this.onCompanionPlay = (event, hash) => this.playCompanionSuggestion(hash);
+        this.onCompanionVisibility = (event, visible) => this.setCompanionVisibility(visible);
         this.onDeviceChange = () => this.refreshInputDevices();
         this.onDocumentClick = (event) => this.handleDocumentClick(event);
     }
@@ -86,6 +89,7 @@ class AiController {
             deck: document.querySelector('#deck'),
             deckTab: document.querySelector('#deck-mode-tab'),
             aiTab: document.querySelector('#ai-mode-tab'),
+            popoutButton: document.querySelector('#ai-popout'),
             panel: document.querySelector('#ai-panel'),
             status: document.querySelector('#ai-status'),
             statusText: document.querySelector('#ai-status .ai-status-text'),
@@ -110,6 +114,7 @@ class AiController {
 
         this.elements.deckTab.addEventListener('click', () => this.showDeck());
         this.elements.aiTab.addEventListener('click', () => this.showAi());
+        this.elements.popoutButton.addEventListener('click', () => this.openCompanion());
         this.elements.scenarioSelect.addEventListener('change', () => this.selectScenario());
         document.querySelector('#ai-scenario-new').addEventListener('click', () => this.newScenario());
         document.querySelector('#ai-scenario-save').addEventListener('click', () => this.saveScenario());
@@ -130,6 +135,8 @@ class AiController {
         });
 
         this.ipcRenderer.on('ai:event', this.onAiEvent);
+        this.ipcRenderer.on('ai:companion:play', this.onCompanionPlay);
+        this.ipcRenderer.on('ai:companion:visibility', this.onCompanionVisibility);
         document.addEventListener('click', this.onDocumentClick);
         navigator.mediaDevices.addEventListener('devicechange', this.onDeviceChange);
 
@@ -140,6 +147,7 @@ class AiController {
         ]);
         this.renderPauseButton();
         this.renderCallState();
+        this.publishCompanion();
     }
 
     handleDocumentClick(event) {
@@ -405,6 +413,57 @@ class AiController {
         this.elements.deckTab.classList.add('is-active');
     }
 
+    async openCompanion() {
+        this.ipcRenderer.send('ai:companion:open');
+        if (!this.aiEnabled) {
+            await this.showAi();
+            await this.showDeck();
+        }
+        this.publishCompanion();
+    }
+
+    setCompanionVisibility(visible) {
+        this.companionOpen = Boolean(visible);
+        if (this.companionOpen) {
+            this.captureSuggestionSnapshot();
+        }
+        this.publishCompanion();
+    }
+
+    playCompanionSuggestion(hash) {
+        const suggestion = this.suggestions.find(function (item) { return item.hash === hash; });
+        if (suggestion) {
+            this.playBlock(suggestion.hash);
+        }
+    }
+
+    companionSnapshot() {
+        const elements = this.elements || {};
+        const page = this.getPage();
+        return {
+            status: this.lastStatus,
+            statusText: elements.statusText ? elements.statusText.textContent : this.statusText(this.lastStatus),
+            cost: elements.sessionCost ? elements.sessionCost.textContent : '',
+            transcript: elements.transcript ? elements.transcript.textContent : '',
+            transcriptFinal: Boolean(elements.transcript && elements.transcript.classList &&
+                elements.transcript.classList.contains('is-final')),
+            callState: elements.callState ? elements.callState.textContent : '',
+            stage: elements.suggestionStage ? elements.suggestionStage.textContent : '',
+            pageHash: page ? page.pageHash : '',
+            pageName: page ? page.pageName || page.pageHash : '',
+            suggestionsFinal: this.suggestionsFinal,
+            suggestions: this.suggestions.map(function (suggestion) {
+                return {hash: suggestion.hash, text: suggestion.text, tactic: suggestion.tactic || 'scenario'};
+            })
+        };
+    }
+
+    publishCompanion() {
+        if (this.ipcRenderer && typeof this.ipcRenderer.send === 'function') {
+            this.ipcRenderer.send('ai:companion:snapshot', this.companionSnapshot());
+        }
+    }
+
     async togglePause() {
         if (this.mode !== 'ai') {
             return;
@@ -662,6 +721,7 @@ class AiController {
         this.lastStatus = status;
         this.elements.status.dataset.status = status;
         this.elements.statusText.textContent = text || this.statusText(status);
+        this.publishCompanion();
     }
 
     statusText(status) {
@@ -714,6 +774,7 @@ class AiController {
 
         this.elements.sessionCost.textContent = elapsed > 0 ?
             minutes + ':' + seconds + ' · ~$' + cost.toFixed(2) : '';
+        this.publishCompanion();
     }
 
     eventMatchesCapture(event) {
@@ -1018,6 +1079,7 @@ class AiController {
     renderTranscript(text, final) {
         this.elements.transcript.textContent = normalizeText(text) || 'Ожидаю речь…';
         this.elements.transcript.classList.toggle('is-final', Boolean(final));
+        this.publishCompanion();
     }
 
     renderCallState() {
@@ -1034,6 +1096,7 @@ class AiController {
         };
         this.elements.callState.textContent = 'Этап: ' + phases[state.phase] +
             (state.activeTopic ? ' · тема: ' + state.activeTopic : '');
+        this.publishCompanion();
     }
 
     linkTurnOutcomes() {
@@ -1265,6 +1328,7 @@ class AiController {
             this.elements.suggestionList.replaceChildren(...buttons);
         }
         this.captureSuggestionSnapshot();
+        this.publishCompanion();
     }
 
     updateSuggestionButton(button, suggestion, index, final) {
@@ -1333,7 +1397,7 @@ class AiController {
             ids: this.suggestions.map(function (suggestion) { return suggestion.hash; }),
             source: this.suggestionSource,
             final: this.suggestionsFinal,
-            visible: this.mode === 'ai',
+            visible: this.mode === 'ai' || this.companionOpen,
             shownAt: new Date().toISOString(),
             revision: turn.revision,
             callState: sanitizeCallState(this.callState)
@@ -1362,6 +1426,7 @@ class AiController {
         empty.className = 'ai-empty';
         empty.textContent = message || 'Подсказки появятся во время речи';
         this.elements.suggestionList.appendChild(empty);
+        this.publishCompanion();
     }
 
     recordPlayed(hash) {
@@ -1387,7 +1452,7 @@ class AiController {
         turn.feedbackEligible = true;
         const snapshots = this.suggestionSnapshotHistory(turn, page.pageHash);
         const snapshot = snapshots.find(function (item) { return item.visible; }) || null;
-        const suggestionsWereVisible = this.mode === 'ai' && this.suggestions.length > 0;
+        const suggestionsWereVisible = (this.mode === 'ai' || this.companionOpen) && this.suggestions.length > 0;
         const suggestedIds = suggestionsWereVisible ? this.suggestions.map(function (item) { return item.hash; }) : [];
         const playedKey = page.pageHash + '\u0000' + hash;
         const event = {
@@ -1755,6 +1820,8 @@ class AiController {
         this.mode = 'deck';
         await this.stopCapture();
         this.ipcRenderer.removeListener('ai:event', this.onAiEvent);
+        this.ipcRenderer.removeListener('ai:companion:play', this.onCompanionPlay);
+        this.ipcRenderer.removeListener('ai:companion:visibility', this.onCompanionVisibility);
         document.removeEventListener('click', this.onDocumentClick);
         navigator.mediaDevices.removeEventListener('devicechange', this.onDeviceChange);
     }

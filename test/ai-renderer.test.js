@@ -263,6 +263,52 @@ test('manual AI-visible choice records whether it was outside the shown top-five
     assert.equal(selection.clickLatencyMs >= 900, true);
 });
 
+test('companion suggestion stays AI-visible while the main window shows the deck', function () {
+    const page = {
+        pageHash: 'character',
+        pageName: 'Персонаж',
+        candidates: [{hash: 'answer', text: 'Ответ из подсказок'}]
+    };
+    const controller = createController({
+        getPage: function () { return page; },
+        getBlockText: function () { return 'Ответ из подсказок'; }
+    });
+    controller.mode = 'deck';
+    controller.aiEnabled = true;
+    controller.companionOpen = true;
+    controller.settings.scenarios = [{id: 'scenario', name: 'Сценарий', prompt: 'План'}];
+    controller.settings.activeScenarioId = 'scenario';
+    controller.currentItemId = 'turn';
+    controller.suggestions = [{hash: 'answer', text: 'Ответ из подсказок'}];
+    controller.turns.set('turn', {
+        itemId: 'turn',
+        scenarioId: 'scenario',
+        pageHash: 'character',
+        startedAt: Date.now() - 500,
+        completed: false,
+        played: new Map(),
+        playedEvents: [],
+        suggestionSnapshots: new Map()
+    });
+
+    controller.recordPlayed('answer');
+
+    const selection = controller.turns.get('turn').played.values().next().value;
+    assert.equal(selection.outsideTopK, false);
+    assert.deepEqual(selection.suggestedIds, ['answer']);
+});
+
+test('companion can play only a suggestion from the current top-five', function () {
+    const played = [];
+    const controller = createController({playBlock: function (hash) { played.push(hash); }});
+    controller.suggestions = [{hash: 'current', text: 'Текущая подсказка'}];
+
+    controller.playCompanionSuggestion('stale');
+    controller.playCompanionSuggestion('current');
+
+    assert.deepEqual(played, ['current']);
+});
+
 test('unchanged completed turn is not written again on every deck switch', async function () {
     let saves = 0;
     const controller = createController({
