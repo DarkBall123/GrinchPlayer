@@ -106,3 +106,29 @@ test('feedback from one utterance is grouped by character page', async function 
     ]);
     assert.equal(payloads.every(function (item) { return item.payload.rootTurnId === 'turn'; }), true);
 });
+
+test('transcript delta starts a turn without server VAD events', function () {
+    const controller = createController({
+        getPage: function () {
+            return {pageHash: 'character', pageName: 'Персонаж', candidates: []};
+        }
+    });
+    controller.mode = 'ai';
+    controller.settings.scenarios = [{id: 'scenario', name: 'Сценарий', prompt: 'План'}];
+    controller.settings.activeScenarioId = 'scenario';
+    controller.clearSuggestions = function () {};
+    let rendered = '';
+    controller.renderTranscript = function (text) { rendered = text; };
+    controller.scheduleProvisional = function () {};
+
+    controller.handleAiEvent({
+        type: 'transcript_delta',
+        itemId: 'server-turn',
+        delta: 'привет',
+        timestamp: 100
+    });
+
+    assert.equal(controller.currentItemId, 'server-turn');
+    assert.equal(controller.turns.get('server-turn').transcript, 'привет');
+    assert.equal(rendered, 'привет');
+});

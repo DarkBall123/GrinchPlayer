@@ -629,6 +629,9 @@ class AiController {
             }
         } else if (event.type === 'transcript_delta') {
             turn.revision += 1;
+            if (this.shouldBeginTurn(turn)) {
+                this.beginTurn(turn);
+            }
             if (this.currentItemId === turn.itemId) {
                 this.renderTranscript(turn.transcript, false);
                 this.scheduleProvisional(turn);
@@ -638,6 +641,10 @@ class AiController {
             turn.finalTranscript = tracked.transcript;
             turn.context = buildContextText(this.historyFor(turn), turn.finalTranscript);
             this.saveFeedback(turn);
+
+            if (this.shouldBeginTurn(turn)) {
+                this.beginTurn(turn);
+            }
 
             if (this.currentItemId === turn.itemId) {
                 this.renderTranscript(turn.finalTranscript, true);
@@ -653,6 +660,18 @@ class AiController {
                 }
             }
         }
+    }
+
+    shouldBeginTurn(turn) {
+        if (!this.currentItemId) {
+            return true;
+        }
+        if (this.currentItemId === turn.itemId) {
+            return false;
+        }
+
+        const current = this.turns.get(this.currentItemId);
+        return !current || turn.startedAt >= current.startedAt;
     }
 
     aiErrorMessage(error) {

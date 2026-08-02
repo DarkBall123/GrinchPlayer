@@ -34,6 +34,11 @@ const RECENT_HISTORY_LIMIT = 10;
 const RELEVANT_HISTORY_LIMIT = 3;
 const HISTORY_EMBEDDING_CACHE_LIMIT = 1000;
 const TOP_K = 5;
+const AUDIO_SAMPLE_RATE = 24000;
+const PREFIX_PADDING_MS = 300;
+const SILENCE_DURATION_MS = 450;
+const SPEECH_START_RMS = 0.008;
+const SPEECH_CONTINUE_RMS = 0.004;
 
 function normalizeApiError(error) {
     if (error && error.publicError) {
@@ -85,6 +90,7 @@ class RealtimeTranscriptionClient {
         this.active = false;
         this.reconnectAttempt = 0;
         this.reconnectTimer = null;
+        this.resetAudioTurn();
     }
 
     start(sender) {
@@ -99,6 +105,7 @@ class RealtimeTranscriptionClient {
         this.active = false;
         this.clearTimer(this.reconnectTimer);
         this.reconnectTimer = null;
+        this.resetAudioTurn();
 
         if (this.socket) {
             const socket = this.socket;
@@ -141,6 +148,7 @@ class RealtimeTranscriptionClient {
             }
 
             this.reconnectAttempt = 0;
+            this.resetAudioTurn();
             socket.send(JSON.stringify({
                 type: 'session.update',
                 session: {
@@ -154,12 +162,7 @@ class RealtimeTranscriptionClient {
                                 delay: 'low',
                                 prompt: 'Разговорная русская речь, телефонный разговор, сленг и короткие фразы.'
                             },
-                            turn_detection: {
-                                type: 'server_vad',
-                                threshold: 0.5,
-                                prefix_padding_ms: 300,
-                                silence_duration_ms: 450
-                            }
+                            turn_detection: null
                         }
                     }
                 }
@@ -190,6 +193,7 @@ class RealtimeTranscriptionClient {
         socket.on('close', () => {
             if (socket === this.socket) {
                 this.socket = null;
+                this.resetAudioTurn();
             }
 
             if (this.active) {
@@ -245,21 +249,83 @@ class RealtimeTranscriptionClient {
             return;
         }
 
-        let buffer;
-        if (Buffer.isBuffer(chunk)) {
-            buffer = chunk;
-        } else if (chunk instanceof ArrayBuffer) {
-            buffer = Buffer.from(chunk);
-        } else if (ArrayBuffer.isView(chunk)) {
-            buffer = Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength);
-        } else {
+        const buffer = this.audioBuffer(chunk);
+        if (!buffer || buffer.byteLength < 2) {
             return;
         }
 
+        const durationMs = (Math.floor(buffer.byteLength / 2) / AUDIO_SAMPLE_RATE) * 1000;
+        const level = this.audioLevel(buffer);
+
+        if (!this.speaking) {
+            if (level < SPEECH_START_RMS) {
+                this.prefixAudio.push({buffer: buffer, durationMs: durationMs});
+                this.prefixDurationMs += durationMs;
+                while (this.prefixDurationMs > PREFIX_PADDING_MS && this.prefixAudio.length > 0) {
+                    const discarded = this.prefixAudio.shift();
+                    this.prefixDurationMs -= discarded.durationMs;
+                }
+                return;
+            }
+
+            this.speaking = true;
+            this.prefixAudio.forEach((entry) => this.sendAudioBuffer(entry.buffer));
+            this.prefixAudio = [];
+            this.prefixDurationMs = 0;
+        }
+
+        this.sendAudioBuffer(buffer);
+
+        if (level > SPEECH_CONTINUE_RMS) {
+            this.silenceDurationMs = 0;
+            return;
+        }
+
+        this.silenceDurationMs += durationMs;
+        if (this.silenceDurationMs >= SILENCE_DURATION_MS) {
+            this.socket.send(JSON.stringify({type: 'input_audio_buffer.commit'}));
+            this.resetAudioTurn();
+        }
+    }
+
+    audioBuffer(chunk) {
+        if (Buffer.isBuffer(chunk)) {
+            return Buffer.from(chunk);
+        }
+        if (chunk instanceof ArrayBuffer) {
+            return Buffer.from(new Uint8Array(chunk));
+        }
+        if (ArrayBuffer.isView(chunk)) {
+            return Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength);
+        }
+
+        return null;
+    }
+
+    audioLevel(buffer) {
+        const sampleCount = Math.floor(buffer.byteLength / 2);
+        let sum = 0;
+
+        for (let index = 0; index < sampleCount; index++) {
+            const sample = buffer.readInt16LE(index * 2) / 32768;
+            sum += sample * sample;
+        }
+
+        return sampleCount > 0 ? Math.sqrt(sum / sampleCount) : 0;
+    }
+
+    sendAudioBuffer(buffer) {
         this.socket.send(JSON.stringify({
             type: 'input_audio_buffer.append',
             audio: buffer.toString('base64')
         }));
+    }
+
+    resetAudioTurn() {
+        this.prefixAudio = [];
+        this.prefixDurationMs = 0;
+        this.speaking = false;
+        this.silenceDurationMs = 0;
     }
 
     send(payload) {

@@ -53,7 +53,16 @@ function fakeSender() {
     return {isDestroyed: function () { return false; }};
 }
 
-test('Realtime client configures Russian PCM transcription and forwards item-scoped events', function () {
+function pcmChunk(value, durationMs) {
+    const sampleCount = Math.round(24000 * ((durationMs || 100) / 1000));
+    const buffer = Buffer.alloc(sampleCount * 2);
+    for (let index = 0; index < sampleCount; index++) {
+        buffer.writeInt16LE(value, index * 2);
+    }
+    return buffer;
+}
+
+test('Realtime client uses manual turn commits for gpt-live-transcribe', function () {
     const events = [];
     const client = new RealtimeTranscriptionClient({
         WebSocket: FakeWebSocket,
@@ -70,29 +79,35 @@ test('Realtime client configures Russian PCM transcription and forwards item-sco
     assert.equal(socket.options.headers.Authorization, 'Bearer test-key');
     assert.equal(socket.sent[0].session.audio.input.format.rate, 24000);
     assert.deepEqual(socket.sent[0].session.audio.input.transcription.languages, ['ru']);
-    assert.deepEqual(socket.sent[0].session.audio.input.turn_detection, {
-        type: 'server_vad',
-        threshold: 0.5,
-        prefix_padding_ms: 300,
-        silence_duration_ms: 450
-    });
+    assert.equal(socket.sent[0].session.audio.input.turn_detection, null);
 
-    client.appendAudio(Uint8Array.from([1, 2, 3]));
-    assert.equal(socket.sent[1].type, 'input_audio_buffer.append');
-    assert.equal(socket.sent[1].audio, 'AQID');
+    client.appendAudio(pcmChunk(0));
+    client.appendAudio(pcmChunk(0));
+    client.appendAudio(pcmChunk(0));
+    assert.equal(socket.sent.length, 1);
 
-    socket.emit('message', Buffer.from(JSON.stringify({
-        type: 'input_audio_buffer.speech_started',
-        item_id: 'server-turn'
-    })));
+    client.appendAudio(pcmChunk(2000));
+    for (let index = 0; index < 5; index++) {
+        client.appendAudio(pcmChunk(0));
+    }
+
+    assert.deepEqual(socket.sent.slice(1).map(function (event) { return event.type; }), [
+        'input_audio_buffer.append',
+        'input_audio_buffer.append',
+        'input_audio_buffer.append',
+        'input_audio_buffer.append',
+        'input_audio_buffer.append',
+        'input_audio_buffer.append',
+        'input_audio_buffer.append',
+        'input_audio_buffer.append',
+        'input_audio_buffer.append',
+        'input_audio_buffer.commit'
+    ]);
+
     socket.emit('message', Buffer.from(JSON.stringify({
         type: 'conversation.item.input_audio_transcription.delta',
         item_id: 'server-turn',
         delta: 'при'
-    })));
-    socket.emit('message', Buffer.from(JSON.stringify({
-        type: 'input_audio_buffer.speech_stopped',
-        item_id: 'server-turn'
     })));
     socket.emit('message', Buffer.from(JSON.stringify({
         type: 'conversation.item.input_audio_transcription.completed',
@@ -100,10 +115,8 @@ test('Realtime client configures Russian PCM transcription and forwards item-sco
         transcript: 'привет'
     })));
 
-    assert.deepEqual(events.slice(-4).map(function (event) { return event.type; }), [
-        'speech_started',
+    assert.deepEqual(events.slice(-2).map(function (event) { return event.type; }), [
         'transcript_delta',
-        'speech_stopped',
         'transcript_completed'
     ]);
     assert.equal(events.at(-1).itemId, 'server-turn');
