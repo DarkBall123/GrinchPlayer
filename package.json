@@ -9,9 +9,9 @@
 	},
 	"scripts": {
 		"postinstall": "electron-builder install-app-deps",
-		"check": "node --check index.js && node --check custom.js && node --check config.js && node --check vendor/howler.js",
+		"check": "node --check index.js && node --check custom.js && node --check config.js && node --check ai-core.js && node --check ai-memory.js && node --check ai-service.js && node --check ai-renderer.js && node --check ai-audio-utils.mjs && node --check ai-audio-worklet.mjs && node --check vendor/howler.js",
 		"lint": "eslint .",
-		"test": "npm run check && npm run lint",
+		"test": "npm run check && node --test && npm run lint",
 		"start": "electron .",
 		"pack": "electron-builder --dir --win --x64",
 		"dist": "electron-builder --win --x64",
@@ -43,7 +43,8 @@
 		"moment": "^2.24.0",
 		"shepherd.js": "^5.0.0",
 		"simplebar": "^4.1.0",
-		"tippy.js": "^4.3.4"
+		"tippy.js": "^4.3.4",
+		"ws": "^8.18.3"
 	},
 	"devDependencies": {
 		"electron": "43.2.0",
@@ -53,6 +54,11 @@
 	},
 	"build": {
 		"appId": "com.Nik.GrinchPlayer",
+		"files": [
+			"**/*",
+			"!.env",
+			"!test/**"
+		],
 		"extraResources": "sounds/*.ogg",
 		"win": {
 			"target": [{

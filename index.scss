@@ -963,10 +963,33 @@ input[type='number']::-webkit-outer-spin-button {
         }
     }
 
+    .ai-mode-tabs {
+        display: flex;
+        height: 30px;
+        border-bottom: 1px solid $border;
+    }
+
+    .ai-mode-tabs a {
+        flex: 1;
+        height: 30px;
+        padding: 3px 10px 0;
+        text-align: center;
+    }
+
+    .ai-mode-tabs a::before {
+        content: none;
+    }
+
+    .ai-mode-tabs a.is-active {
+        color: $white;
+        background: rgba($green, 0.25);
+        border-bottom: 2px solid $green;
+    }
+
     .deck-items {
         & {
             display: none;
-            height: calc(100% - 190px);
+            height: calc(100% - 220px);
             transition: height 0.3s;
         }
 
@@ -1056,6 +1079,333 @@ input[type='number']::-webkit-outer-spin-button {
             color: $white;
             outline: 2px solid $blue;
         }
+    }
+}
+
+.ai-panel {
+    display: none;
+    height: calc(100% - 60px);
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.panel.deck.ai-active {
+    > .phrases,
+    > .batch,
+    > .panel-search,
+    > .panel-tabs[data-page],
+    > .deck-items,
+    > .bottom,
+    > .training-mode,
+    > .edit-mode {
+        display: none !important;
+    }
+
+    .ai-panel {
+        display: flex;
+    }
+}
+
+.ai-status {
+    display: grid;
+    grid-template-columns: 10px minmax(0, 1fr) auto 28px;
+    align-items: center;
+    gap: 7px;
+    min-height: 40px;
+    padding: 5px 7px;
+    border-bottom: $panel-item-border;
+
+    .ai-status-dot {
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        background: $grey-light;
+    }
+
+    &[data-status='connected'] .ai-status-dot {
+        background: $green;
+        box-shadow: 0 0 8px rgba($green, 0.8);
+    }
+
+    &[data-status='connecting'] .ai-status-dot,
+    &[data-status='reconnecting'] .ai-status-dot {
+        background: $yellow;
+    }
+
+    &[data-status='error'] .ai-status-dot {
+        background: $red;
+    }
+
+    .ai-status-text {
+        overflow: hidden;
+        font-size: 0.82rem;
+        line-height: 1.1;
+    }
+
+    .ai-session-cost {
+        color: $grey-light;
+        font-size: 0.68rem;
+        white-space: nowrap;
+    }
+
+    .button {
+        width: 28px;
+        height: 28px;
+        padding: 0;
+        border: 0;
+        background: transparent;
+    }
+}
+
+.ai-device,
+.ai-transcript,
+.ai-suggestions {
+    padding: 8px;
+    border-bottom: $panel-item-border;
+}
+
+.ai-scenario {
+    border-bottom: $panel-item-border;
+
+    summary {
+        display: flex;
+        justify-content: space-between;
+        padding: 7px 8px;
+        color: $grey-light;
+        font-size: 0.72rem;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        cursor: pointer;
+        user-select: none;
+    }
+
+    summary::marker {
+        color: $green;
+    }
+
+    #ai-scenario-label {
+        max-width: 135px;
+        overflow: hidden;
+        color: $green;
+        text-overflow: ellipsis;
+        text-transform: none;
+        white-space: nowrap;
+    }
+}
+
+.ai-scenario-body {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    padding: 0 8px 8px;
+
+    .input,
+    .textarea,
+    select {
+        width: 100%;
+        color: $white;
+        background: $grey-dark;
+        border: 1px solid $border;
+        border-radius: 3px;
+        box-shadow: none;
+        font-size: 0.76rem;
+    }
+
+    .input,
+    select {
+        height: 30px;
+        padding: 0 7px;
+    }
+
+    .textarea {
+        min-height: 74px;
+        max-height: 150px;
+        padding: 6px 7px;
+        line-height: 1.25;
+        resize: vertical;
+    }
+}
+
+.ai-scenario-picker {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) repeat(3, 28px);
+    gap: 4px;
+
+    .button {
+        width: 28px;
+        height: 30px;
+        padding: 0;
+    }
+}
+
+.ai-device {
+    label {
+        display: block;
+        margin-bottom: 4px;
+        color: $grey-light;
+        font-size: 0.72rem;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+    }
+
+    select {
+        width: 100%;
+        height: 30px;
+        padding: 0 7px;
+        color: $white;
+        background: $grey-dark;
+        border: 1px solid $border;
+        border-radius: 3px;
+    }
+
+    .ai-hint {
+        margin-top: 5px;
+        color: $grey-light;
+        font-size: 0.68rem;
+        line-height: 1.25;
+    }
+}
+
+.ai-level {
+    height: 4px;
+    margin-top: 6px;
+    overflow: hidden;
+    background: $grey-dark;
+    border-radius: 2px;
+
+    span {
+        display: block;
+        width: 0;
+        height: 100%;
+        background: $green;
+        transition: width 0.08s linear;
+    }
+}
+
+.ai-section-title {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 5px;
+    color: $grey-light;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.ai-transcript-text {
+    min-height: 54px;
+    max-height: 100px;
+    overflow-y: auto;
+    color: rgba($white, 0.75);
+    font-size: 0.88rem;
+    line-height: 1.35;
+
+    &.is-final {
+        color: $white;
+    }
+}
+
+.ai-suggestions {
+    min-height: 0;
+    flex: 1;
+    overflow-y: auto;
+}
+
+.ai-suggestion-stage {
+    color: $green;
+    font-size: 0.65rem;
+    text-transform: none;
+}
+
+.ai-suggestion-list {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.button.ai-suggestion {
+    display: grid;
+    grid-template-columns: 28px minmax(0, 1fr);
+    width: 100%;
+    min-height: 42px;
+    height: auto;
+    padding: 0;
+    overflow: hidden;
+    color: $white;
+    white-space: normal;
+    background: rgba($grey-dark, 0.65);
+    border: 1px solid rgba($white, 0.14);
+
+    &.is-provisional {
+        opacity: 0.72;
+    }
+
+    &.is-final {
+        border-color: rgba($green, 0.5);
+    }
+
+    &:hover {
+        color: $white;
+        background: rgba($green, 0.24);
+        border-color: $green;
+    }
+}
+
+.ai-suggestion-key {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    align-self: stretch;
+    color: $green;
+    font-weight: bold;
+    background: rgba($black, 0.18);
+    border-right: 1px solid rgba($white, 0.12);
+}
+
+.ai-suggestion-text {
+    align-self: center;
+    padding: 6px 8px;
+    overflow: hidden;
+    line-height: 1.15;
+    text-align: left;
+}
+
+.ai-empty {
+    padding: 18px 8px;
+    color: $grey-light;
+    font-size: 0.78rem;
+    line-height: 1.35;
+    text-align: center;
+}
+
+.ai-feedback-controls {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    min-height: 40px;
+    padding: 5px 8px;
+    font-size: 0.72rem;
+
+    .buttons {
+        margin: 0;
+    }
+
+    .button {
+        width: 30px;
+        height: 28px;
+        margin: 0 0 0 4px !important;
+        padding: 0;
+    }
+}
+
+.ai-settings-card {
+    width: 520px;
+
+    .ai-routing-help {
+        max-width: 480px;
+        margin-top: 12px;
+        color: $grey-light;
+        font-size: 0.85rem;
     }
 }
 
@@ -1166,7 +1516,7 @@ input[type='number']::-webkit-outer-spin-button {
 
 .has-bottom, .has-training {
     .panel.deck .deck-items {
-        height: calc(100% - 505px);
+        height: calc(100% - 535px);
     }
 }
 

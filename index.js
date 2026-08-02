@@ -3,6 +3,11 @@ const fs = require('fs');
 const path = require('path');
 const {app, BrowserWindow, dialog, ipcMain, screen} = require('electron');
 
+const localEnvPath = path.join(__dirname, '.env');
+if (!process.env.OPENAI_API_KEY && fs.existsSync(localEnvPath)) {
+    process.loadEnvFile(localEnvPath);
+}
+
 // Note: Must match `build.appId` in package.json
 app.setAppUserModelId('com.Nik.GrinchPlayer');
 app.disableHardwareAcceleration();
@@ -23,6 +28,9 @@ if (process.platform === 'win32' && process.env.PORTABLE_EXECUTABLE_DIR) {
 const Store = require('electron-store');
 Store.initRenderer();
 const config = require('./config');
+const {AiService} = require('./ai-service');
+const aiService = new AiService({Store: Store});
+aiService.register(ipcMain);
 
 // Prevent variables from being garbage collected
 let mainWindow;
@@ -124,6 +132,10 @@ app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') {
         app.quit();
     }
+});
+
+app.on('before-quit', () => {
+    aiService.dispose();
 });
 
 app.on('activate', async () => {

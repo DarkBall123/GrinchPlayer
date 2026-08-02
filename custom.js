@@ -17,6 +17,7 @@ const Shepherd = require('shepherd.js');
 const tippy = require('tippy.js/umd/index');
 const Fuse = require('fuse.js');
 const moment = require('moment');
+const {AiController} = require('./ai-renderer');
 
 const hp = require('./vendor/howler');
 const config = require('./config');
@@ -72,6 +73,7 @@ let fuseSearch;
 let infoTipsActive = false;
 let infoGradientActive = false;
 let farmhash;
+let aiController;
 
 let trainDb = {};
 let customTrain = {};
@@ -513,6 +515,10 @@ function playSound(element, maxTime, onEnd) {
     lastPlayedHash = hash;
     $currentBlock = $(element);
 
+    if (aiController) {
+        aiController.recordPlayed(hash);
+    }
+
     if (maxTime !== undefined) {
         training.maxTime = setTimeout(function () {
             if (howl.playing()) {
@@ -520,6 +526,44 @@ function playSound(element, maxTime, onEnd) {
             }
         }, maxTime);
     }
+}
+
+function getAiPage() {
+    const page = allPages[currentTab];
+    if (!currentTab || !page || !page.blocks) {
+        return null;
+    }
+
+    const candidates = [];
+    _.each(page.blocks, function (block, blockHash) {
+        if (candidates.length < 500 && block.text && block.path) {
+            candidates.push({hash: blockHash, text: block.text});
+        }
+    });
+
+    return candidates.length > 0 ? {pageHash: currentTab, candidates: candidates} : null;
+}
+
+function getAiBlockText(pageHash, blockHash) {
+    const page = pageHash === currentTab ? allPages[currentTab] : null;
+    return page && page.blocks[blockHash] ? page.blocks[blockHash].text : '';
+}
+
+function playAiBlock(hash) {
+    const page = allPages[currentTab];
+    if (!page || !page.blocks[hash]) {
+        return;
+    }
+
+    const pageSelector = '[data-page="' + currentTab + '"]';
+    const blockSelector = '[data-hash="' + hash + '"]';
+    const element = document.querySelector('.main' + pageSelector + ' ' + blockSelector) ||
+        document.querySelector('.deck-items' + pageSelector + ' ' + blockSelector) || {dataset: {hash: hash}};
+
+    page.blocks[hash].lastDate = new Date().toISOString();
+    page.blocks[hash].counter = Number(page.blocks[hash].counter || 0) + 1;
+    addInitHowl(hash, page.blocks[hash].path);
+    playSound(element);
 }
 
 // Add multiple files as blocks
@@ -1135,18 +1179,24 @@ function closeTab(hash) {
         $prevTab.click();
     } else {
         tabClick(true);
+        if (currentTab === '' && aiController) {
+            aiController.pageChanged();
+        }
     }
 }
 
 // Close all tabs
 function closeAllTabs() {
-    const selector = '.tab, .main, .panel-tabs, .deck-items, .deck .search';
+    const selector = '.tab, .main, .panel-tabs[data-page], .deck-items, .deck .search';
     document.querySelectorAll(selector).forEach(function (el) {
         el.remove();
     });
     hp.Howler.unload();
     activePages = {};
     currentTab = '';
+    if (aiController) {
+        aiController.pageChanged();
+    }
 }
 
 // Update zoom of the page
@@ -1200,6 +1250,8 @@ function initEditableTab($tab) {
                 if (currentTab === oldHash) {
                     currentTab = newHash;
                 }
+
+                aiController.migratePage(oldHash, newHash);
 
                 resetPageSearch();
                 $('.page[data-page="' + oldHash + '"] > .text').text(value);
@@ -2524,6 +2576,9 @@ function pickNextTrainingSound() {
 
 // Do actions before window is closed or reloaded
 window.addEventListener('beforeunload', function () {
+    if (aiController) {
+        aiController.destroy();
+    }
     saveAllData(true);
 });
 
@@ -2541,6 +2596,24 @@ $(async function () {
     $wrapper = $('.wrapper');
     $trainMode = $('#training-mode');
     $trainButton = $('#start-training');
+
+    aiController = new AiController({
+        ipcRenderer: ipcRenderer,
+        getPage: getAiPage,
+        getBlockText: getAiBlockText,
+        playBlock: playAiBlock,
+        notify: showNotification,
+        confirm: function (text) { return confirmAction(text); },
+        beforeOpen: function () {
+            if (training.active) {
+                resetTrainingMode();
+            }
+            if (isTrainingMode) {
+                toggleTrainingMode();
+            }
+        }
+    });
+    await aiController.init();
 
     // Set moment.js locale globally
     moment.locale('ru');
@@ -2566,6 +2639,7 @@ $(async function () {
         content: '<div class="panel settings-panel">' +
             '<p class="panel-heading">Настройки</p>' +
             '<a class="panel-block set-device" title="Выбрать устройство вывода звука"><i class="fa fa-gear"></i> Устройство вывода</a>' +
+            '<a class="panel-block open-ai-settings" title="OpenAI API-ключ и маршрутизация"><i class="fa fa-bolt"></i> AI / OpenAI</a>' +
             '<a class="panel-block flush-cache" title="Очистить кеш (сначала закрой вкладки)"><i class="fa fa-eraser"></i> Очистить кеш страниц</a>' +
             '<div class="panel-block"><i class="fa fa-volume-up"></i> Громкость' +
             '<input id="volume-slider" class="slider has-output is-fullwidth" min="0" max="100"' +
@@ -2677,7 +2751,7 @@ $(async function () {
         $deckItems = $('.deck-items' + selector);
         updateDeckData();
 
-        const query = '.main, .panel-tabs, .deck-items, .deck .search';
+        const query = '.main, .panel-tabs[data-page], .deck-items, .deck .search';
         document.querySelectorAll(query).forEach(function (el) {
             el.style.display = 'none';
         });
@@ -2692,6 +2766,7 @@ $(async function () {
         $(e.currentTarget).addClass('is-active');
 
         allPages[currentTab].counter += 1;
+        aiController.pageChanged();
     }).on('contextmenu', '.tab', function (e) {
         e.preventDefault();
         if (isEditMode) {
@@ -3234,6 +3309,7 @@ $(async function () {
                     $parent.remove();
                     updatePageSearch();
 
+                    aiController.removePage(hash);
                     delete allPages[hash];
 
                     // Remove cached file if it exists
@@ -3556,6 +3632,9 @@ $(async function () {
     // Quick switch keys 1-7
     [1, 2, 3, 4, 5, 6, 7].forEach(function (val, i) {
         addHotkey(val.toString(), function () {
+            if (i < 5 && aiController.playHotkey(i)) {
+                return;
+            }
             $tabList.find('li').eq(i).click();
         });
     });
