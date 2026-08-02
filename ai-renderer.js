@@ -2,16 +2,22 @@
 
 const {
     TranscriptTracker,
+    advanceCallState,
     buildContextText,
+    createCallState,
     isCurrentRanking,
-    normalizeText
+    normalizeText,
+    rankQuickCandidates,
+    sanitizeCallState,
+    stabilizeSuggestionSlots
 } = require('./ai-core');
 
 const TOP_K = 5;
-const PROVISIONAL_DEBOUNCE_MS = 700;
+const PROVISIONAL_DEBOUNCE_MS = 450;
 const FINAL_DEADLINE_MS = 1800;
 const TRANSCRIPTION_COST_PER_MINUTE = 0.017;
 const MAX_CALL_TURNS = 500;
+const MAX_SUGGESTION_SNAPSHOTS = 3;
 
 class AiController {
     constructor(options) {
@@ -37,6 +43,8 @@ class AiController {
         this.paused = false;
         this.starting = false;
         this.captureGeneration = 0;
+        this.captureSessionToken = '';
+        this.acceptTranscriptionEvents = false;
         this.restartRequested = false;
         this.stream = null;
         this.audioContext = null;
@@ -48,7 +56,10 @@ class AiController {
         this.turnOrder = [];
         this.currentItemId = '';
         this.sessionId = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
+        this.callState = createCallState();
         this.suggestions = [];
+        this.suggestionsFinal = false;
+        this.suggestionSource = '';
         this.rankInFlight = false;
         this.rankRequestId = 0;
         this.pendingProvisional = null;
@@ -58,6 +69,8 @@ class AiController {
         this.finalDeadlineTimer = null;
         this.indexPromise = null;
         this.feedbackQueue = Promise.resolve();
+        this.feedbackTombstones = new Set();
+        this.feedbackEpoch = 0;
         this.billingStartedAt = null;
         this.billingElapsedMs = 0;
         this.billingTimer = null;
@@ -78,6 +91,7 @@ class AiController {
             statusText: document.querySelector('#ai-status .ai-status-text'),
             sessionCost: document.querySelector('#ai-status .ai-session-cost'),
             pauseButton: document.querySelector('#ai-pause'),
+            newCallButton: document.querySelector('#ai-new-call'),
             scenarioSelect: document.querySelector('#ai-scenario-select'),
             scenarioName: document.querySelector('#ai-scenario-name'),
             scenarioPrompt: document.querySelector('#ai-scenario-prompt'),
@@ -85,6 +99,7 @@ class AiController {
             inputDevice: document.querySelector('#ai-input-device'),
             levelBar: document.querySelector('#ai-level-bar'),
             transcript: document.querySelector('#ai-transcript-text'),
+            callState: document.querySelector('#ai-call-state'),
             suggestionStage: document.querySelector('#ai-suggestion-stage'),
             suggestionList: document.querySelector('#ai-suggestion-list'),
             feedbackCount: document.querySelector('#ai-feedback-count'),
@@ -99,8 +114,10 @@ class AiController {
         document.querySelector('#ai-scenario-new').addEventListener('click', () => this.newScenario());
         document.querySelector('#ai-scenario-save').addEventListener('click', () => this.saveScenario());
         document.querySelector('#ai-scenario-delete').addEventListener('click', () => this.deleteScenario());
+        document.querySelector('#ai-scenario-template').addEventListener('click', () => this.applyScenarioTemplate());
         this.elements.inputDevice.addEventListener('change', () => this.changeInputDevice());
         this.elements.pauseButton.addEventListener('click', () => this.togglePause());
+        this.elements.newCallButton.addEventListener('click', () => this.newCall());
         document.querySelector('#ai-key-save').addEventListener('click', () => this.saveApiKey());
         document.querySelector('#ai-key-delete').addEventListener('click', () => this.deleteApiKey());
         document.querySelector('#ai-feedback-undo').addEventListener('click', () => this.undoFeedback());
@@ -122,6 +139,7 @@ class AiController {
             this.refreshFeedbackStats()
         ]);
         this.renderPauseButton();
+        this.renderCallState();
     }
 
     handleDocumentClick(event) {
@@ -179,6 +197,25 @@ class AiController {
         this.elements.scenarioName.focus();
     }
 
+    applyScenarioTemplate() {
+        if (this.elements.scenarioPrompt.value.trim()) {
+            this.notify('Поле уже заполнено — шаблон его не перезаписал', true, 2200);
+            return;
+        }
+        this.elements.scenarioPrompt.value = [
+            'Легенда:',
+            'Цель:',
+            'Факты:',
+            'Этапы:',
+            '1.',
+            '2.',
+            'Триггеры:',
+            'Нельзя:',
+            'Колбэки:'
+        ].join('\n');
+        this.elements.scenarioPrompt.focus();
+    }
+
     async saveScenario() {
         const name = normalizeText(this.elements.scenarioName.value);
         const prompt = this.elements.scenarioPrompt.value.trim();
@@ -233,16 +270,15 @@ class AiController {
         }
 
         this.flushFeedback();
+        await this.stopCapture();
         this.clearConversation();
         if (this.activeScenario()) {
             if (this.paused) {
-                await this.stopCapture();
                 this.setStatus('paused');
             } else {
-                await this.restartCapture();
+                await this.startCapture();
             }
         } else {
-            await this.stopCapture();
             this.setStatus('error', 'Создайте и выберите сценарий пранка');
         }
     }
@@ -350,6 +386,7 @@ class AiController {
             } else {
                 await this.startCapture();
             }
+            this.captureSuggestionSnapshot();
             this.renderPauseButton();
         }
     }
@@ -384,6 +421,22 @@ class AiController {
         this.renderPauseButton();
         await this.stopCapture();
         this.setStatus('paused');
+    }
+
+    async newCall() {
+        if (this.confirm('Начать новый звонок и очистить только контекст разговора?') !== 1) {
+            return;
+        }
+
+        this.flushFeedback();
+        await this.stopCapture();
+        this.clearConversation();
+        if (this.aiEnabled && !this.paused) {
+            await this.startCapture();
+        } else if (this.aiEnabled) {
+            this.setStatus('paused');
+        }
+        this.notify('Начат новый звонок', false, 1600);
     }
 
     renderPauseButton() {
@@ -432,6 +485,9 @@ class AiController {
 
         this.starting = true;
         const generation = ++this.captureGeneration;
+        const sessionToken = this.sessionId + ':' + generation + ':' + Date.now().toString(36);
+        this.captureSessionToken = sessionToken;
+        this.acceptTranscriptionEvents = false;
         const inputDeviceId = this.settings.inputDeviceId;
         this.setStatus('connecting', 'Подключение…');
 
@@ -482,7 +538,7 @@ class AiController {
             }
 
             this.captureActive = true;
-            this.ipcRenderer.send('ai:start');
+            this.ipcRenderer.send('ai:start', sessionToken);
             this.indexCurrentPage();
         } catch (error) {
             await this.stopCapture();
@@ -505,13 +561,17 @@ class AiController {
 
     async stopCapture() {
         this.captureGeneration += 1;
-        this.ipcRenderer.send('ai:stop');
+        const sessionToken = this.captureSessionToken;
+        this.captureSessionToken = '';
+        this.acceptTranscriptionEvents = false;
+        this.ipcRenderer.send('ai:stop', sessionToken);
         this.captureActive = false;
         this.pauseBilling();
         clearTimeout(this.provisionalTimer);
         clearTimeout(this.finalDeadlineTimer);
         this.provisionalTimer = null;
         this.finalDeadlineTimer = null;
+        this.closeIncompleteTurn();
 
         if (this.audioSource) {
             this.audioSource.disconnect();
@@ -538,10 +598,38 @@ class AiController {
         this.updateLevel(0);
     }
 
+    closeIncompleteTurn() {
+        const turn = this.turns.get(this.currentItemId);
+        if (!turn || turn.completed) {
+            return;
+        }
+
+        turn.closed = true;
+        turn.rankingSettled = true;
+        this.currentItemId = '';
+        this.rankRequestId += 1;
+        this.rankInFlight = false;
+        this.pendingProvisional = null;
+        this.pendingFinal = null;
+
+        const latestCompleted = Array.from(this.turns.values())
+            .filter(function (candidate) {
+                return candidate.completed && normalizeText(candidate.finalTranscript);
+            })
+            .sort(function (left, right) { return left.startedAt - right.startedAt; })
+            .at(-1);
+        if (this.elements && this.elements.transcript) {
+            this.renderTranscript(latestCompleted ? latestCompleted.finalTranscript : '', Boolean(latestCompleted));
+        }
+        if (this.elements && this.elements.suggestionList && this.elements.suggestionStage) {
+            this.clearSuggestions('Подсказки появятся во время речи');
+        }
+    }
+
     handleAudioPacket(pcm, level) {
         this.updateLevel(level);
         if (this.lastStatus === 'connected') {
-            this.ipcRenderer.send('ai:audio', pcm);
+            this.ipcRenderer.send('ai:audio', pcm, this.captureSessionToken);
         }
     }
 
@@ -627,12 +715,24 @@ class AiController {
             minutes + ':' + seconds + ' · ~$' + cost.toFixed(2) : '';
     }
 
+    eventMatchesCapture(event) {
+        const token = String(event && event.sessionToken || '');
+        return !token || token === this.captureSessionToken;
+    }
+
+    eventItemId(event) {
+        const itemId = String(event && event.itemId || '');
+        const token = String(event && event.sessionToken || '');
+        return itemId && token ? token + '\u0001' + itemId : itemId;
+    }
+
     handleAiEvent(event) {
-        if (!event) {
+        if (!event || !this.eventMatchesCapture(event)) {
             return;
         }
 
         if (event.type === 'status') {
+            this.acceptTranscriptionEvents = event.status === 'connected';
             if (event.status === 'stopped' && this.aiEnabled && this.paused) {
                 this.setStatus('paused');
                 return;
@@ -644,6 +744,7 @@ class AiController {
             return;
         }
         if (event.type === 'error') {
+            this.acceptTranscriptionEvents = false;
             this.setStatus('error', this.aiErrorMessage(event.error));
             return;
         }
@@ -654,18 +755,49 @@ class AiController {
             this.applyRankingResult(event.result);
             return;
         }
-
-        const tracked = this.tracker.handle(event);
-        if (!tracked) {
+        if (event.type === 'turn_failed') {
+            const itemId = this.eventItemId(event);
+            const failedTurn = this.turns.get(itemId);
+            if (failedTurn) {
+                failedTurn.closed = true;
+            }
+            if (this.currentItemId === itemId) {
+                this.currentItemId = '';
+                this.clearSuggestions('Не удалось распознать реплику');
+                this.renderTranscript('Ожидаю следующую реплику…', false);
+            }
+            this.notify(this.aiErrorMessage(event.error || {}), true, 1800);
+            return;
+        }
+        if (!this.acceptTranscriptionEvents) {
             return;
         }
 
+        const itemId = this.eventItemId(event);
+        const trackedEvent = itemId === event.itemId ? event : Object.assign({}, event, {itemId: itemId});
+        const tracked = this.tracker.handle(trackedEvent);
+        if (!tracked) {
+            return;
+        }
+        if (event.type === 'transcript_delta' && typeof event.transcript === 'string') {
+            tracked.transcript = event.transcript;
+            const stored = this.tracker.turns.get(tracked.itemId);
+            if (stored) {
+                stored.transcript = event.transcript;
+            }
+        }
+
         const turn = this.ensureTurn(tracked.itemId, tracked.startedAt || event.timestamp);
+        if (tracked.startedAt) {
+            turn.startedAt = tracked.startedAt;
+        }
         turn.transcript = tracked.transcript;
         turn.completed = tracked.completed;
 
         if (event.type === 'speech_started') {
-            this.beginTurn(turn);
+            if (this.shouldBeginTurn(turn)) {
+                this.beginTurn(turn);
+            }
         } else if (event.type === 'speech_stopped') {
             turn.stoppedAt = tracked.stoppedAt || Date.now();
             if (this.currentItemId === turn.itemId) {
@@ -686,12 +818,14 @@ class AiController {
         } else if (event.type === 'transcript_completed') {
             turn.revision += 1;
             turn.finalTranscript = tracked.transcript;
-            turn.context = buildContextText(this.historyFor(turn), turn.finalTranscript);
-            this.saveFeedback(turn);
 
             if (this.shouldBeginTurn(turn)) {
                 this.beginTurn(turn);
             }
+
+            const rerankTurn = this.rebuildConversationState(turn);
+            this.saveFeedback(turn);
+            this.linkTurnOutcomes();
 
             if (this.currentItemId === turn.itemId) {
                 this.renderTranscript(turn.finalTranscript, true);
@@ -705,6 +839,8 @@ class AiController {
                     turn.stoppedAt = Date.now();
                     this.scheduleFinalDeadline(turn);
                 }
+            } else if (rerankTurn) {
+                this.requestRanking(rerankTurn, true);
             }
         }
     }
@@ -754,8 +890,20 @@ class AiController {
                 revision: 0,
                 deadlineExpired: false,
                 rankingSettled: false,
-                played: new Map()
+                played: new Map(),
+                playedEvents: [],
+                suggestionSnapshots: new Map(),
+                feedbackSignatures: new Map(),
+                feedbackEpoch: this.feedbackEpoch,
+                feedbackRootId: '',
+                feedbackEligible: true,
+                callState: sanitizeCallState(this.callState),
+                stateAdvanced: false,
+                nextTranscript: ''
             };
+            if (this.feedbackEpoch > 0) {
+                turn.feedbackRootId = turn.turnId + ':feedback:' + this.feedbackEpoch;
+            }
             this.turns.set(itemId, turn);
             this.turnOrder.push(itemId);
         }
@@ -778,6 +926,7 @@ class AiController {
         const scenario = this.activeScenario();
         turn.pageHash = page ? page.pageHash : '';
         turn.scenarioId = scenario ? scenario.id : '';
+        turn.callState = sanitizeCallState(this.callState);
         clearTimeout(this.finalDeadlineTimer);
         this.finalDeadlineTimer = null;
         this.pendingProvisional = null;
@@ -805,16 +954,115 @@ class AiController {
                 return candidate && candidate.itemId !== turn.itemId && candidate.completed &&
                     candidate.startedAt <= turn.startedAt && candidate.scenarioId === turn.scenarioId;
             })
+            .sort(function (left, right) { return left.startedAt - right.startedAt; })
             .map((candidate) => ({
                 turnId: candidate.turnId,
                 transcript: candidate.finalTranscript,
-                played: Array.from(candidate.played.values())
+                played: Array.isArray(candidate.playedEvents) && candidate.playedEvents.length > 0 ?
+                    candidate.playedEvents.slice() : Array.from(candidate.played.values())
             }));
+    }
+
+    rebuildConversationState(completedTurn) {
+        const order = new Map(this.turnOrder.map(function (itemId, index) { return [itemId, index]; }));
+        const completed = Array.from(this.turns.values())
+            .filter(function (turn) {
+                return turn.completed && normalizeText(turn.finalTranscript);
+            })
+            .sort(function (left, right) {
+                return left.startedAt - right.startedAt ||
+                    (order.get(left.itemId) || 0) - (order.get(right.itemId) || 0);
+            });
+        const completedIndex = completed.indexOf(completedTurn);
+        const historyByScenario = new Map();
+        const affected = [];
+        let state = createCallState();
+
+        completed.forEach((turn, index) => {
+            const scenarioId = turn.scenarioId || '';
+            const history = historyByScenario.get(scenarioId) || [];
+            const context = buildContextText(history, turn.finalTranscript);
+            state = advanceCallState(state, turn.finalTranscript);
+            const callState = sanitizeCallState(state);
+            const changed = turn.context !== context ||
+                JSON.stringify(sanitizeCallState(turn.callState)) !== JSON.stringify(callState);
+
+            turn.context = context;
+            turn.callState = callState;
+            turn.stateAdvanced = true;
+            if (changed && completedIndex >= 0 && index > completedIndex) {
+                turn.revision += 1;
+                turn.rankingSettled = false;
+                if (turn.feedbackSignatures instanceof Map) {
+                    turn.feedbackSignatures.clear();
+                }
+                affected.push(turn);
+            }
+
+            history.push({
+                turnId: turn.turnId,
+                transcript: turn.finalTranscript,
+                played: Array.isArray(turn.playedEvents) && turn.playedEvents.length > 0 ?
+                    turn.playedEvents.slice() : Array.from(turn.played.values())
+            });
+            historyByScenario.set(scenarioId, history);
+        });
+
+        this.callState = sanitizeCallState(state);
+        this.renderCallState();
+        affected.forEach((turn) => this.saveFeedback(turn));
+        return affected.find((turn) => turn.itemId === this.currentItemId && turn.completed) || null;
     }
 
     renderTranscript(text, final) {
         this.elements.transcript.textContent = normalizeText(text) || 'Ожидаю речь…';
         this.elements.transcript.classList.toggle('is-final', Boolean(final));
+    }
+
+    renderCallState() {
+        if (!this.elements || !this.elements.callState) {
+            return;
+        }
+        const state = sanitizeCallState(this.callState);
+        const phases = {
+            opening: 'вход',
+            engagement: 'зацепка',
+            development: 'развитие',
+            escalation: 'эскалация',
+            closing: 'завершение'
+        };
+        this.elements.callState.textContent = 'Этап: ' + phases[state.phase] +
+            (state.activeTopic ? ' · тема: ' + state.activeTopic : '');
+    }
+
+    linkTurnOutcomes() {
+        const completed = Array.from(this.turns.values())
+            .filter(function (turn) { return turn.completed && normalizeText(turn.finalTranscript); })
+            .sort(function (left, right) { return left.startedAt - right.startedAt; });
+
+        for (let index = 0; index < completed.length - 1; index++) {
+            const turn = completed[index];
+            const next = completed[index + 1];
+            const rootTurnId = this.feedbackRootId(turn);
+            if (turn.scenarioId !== next.scenarioId || turn.nextTranscript === next.finalTranscript ||
+                this.feedbackTombstones.has(rootTurnId)) {
+                continue;
+            }
+            const previousTranscript = turn.nextTranscript;
+            turn.nextTranscript = next.finalTranscript;
+            this.feedbackQueue = this.feedbackQueue
+                .then(() => this.ipcRenderer.invoke('ai:feedback:next', {
+                    rootTurnId: rootTurnId,
+                    transcript: next.finalTranscript
+                }))
+                .then((stats) => this.renderFeedbackStats(stats))
+                .catch(() => {
+                    if (turn.nextTranscript === next.finalTranscript) {
+                        turn.nextTranscript = previousTranscript;
+                    }
+                    this.notify('Не удалось связать следующий ответ', true, 1800);
+                });
+        }
     }
 
     scheduleProvisional(turn) {
@@ -835,8 +1083,29 @@ class AiController {
         const remaining = Math.max(0, (turn.stoppedAt + FINAL_DEADLINE_MS) - Date.now());
         this.finalDeadlineTimer = setTimeout(() => {
             turn.deadlineExpired = true;
-            if (!turn.rankingSettled && this.isTurnVisible(turn) && this.suggestions.length > 0) {
+            if (turn.rankingSettled || !this.isTurnVisible(turn)) {
+                return;
+            }
+            if (this.suggestions.length > 0) {
                 this.renderSuggestions(this.suggestions, true, 'semantic');
+                return;
+            }
+
+            const page = this.getPage();
+            const scenario = this.activeScenario();
+            const recentHashes = this.historyFor(turn).flatMap(function (historyTurn) {
+                return (historyTurn.played || []).map(function (item) { return item.hash || item.blockHash; });
+            }).concat(Array.from(turn.played.values()).map(function (item) { return item.hash || item.blockHash; }))
+                .filter(Boolean);
+            const suggestions = rankQuickCandidates(
+                page ? page.candidates : [],
+                turn.finalTranscript || turn.transcript,
+                scenario ? scenario.prompt : '',
+                {recentHashes: recentHashes},
+                TOP_K
+            );
+            if (suggestions.length > 0) {
+                this.renderSuggestions(suggestions, true, 'local');
             }
         }, remaining);
     }
@@ -882,7 +1151,8 @@ class AiController {
                 scenario: scenario,
                 pageName: page.pageName || page.pageHash,
                 history: history,
-                played: Array.from(turn.played.values()),
+                played: Array.isArray(turn.playedEvents) ? turn.playedEvents.slice() : Array.from(turn.played.values()),
+                callState: turn.callState || this.callState,
                 candidates: page.candidates,
                 final: final
             });
@@ -942,6 +1212,9 @@ class AiController {
         turn.rankingSettled = true;
         clearTimeout(this.finalDeadlineTimer);
         this.finalDeadlineTimer = null;
+        this.callState = sanitizeCallState(result.callState || this.callState);
+        turn.callState = sanitizeCallState(this.callState);
+        this.renderCallState();
         this.renderSuggestions(result.suggestions, true, result.source);
     }
 
@@ -951,7 +1224,7 @@ class AiController {
             return [candidate.hash, candidate];
         }));
         const seen = new Set();
-        this.suggestions = (suggestions || [])
+        const resolved = (suggestions || [])
             .filter(function (suggestion) {
                 if (!suggestion || !candidates.has(suggestion.hash) || seen.has(suggestion.hash)) {
                     return false;
@@ -959,9 +1232,20 @@ class AiController {
                 seen.add(suggestion.hash);
                 return true;
             })
-            .map(function (suggestion) { return candidates.get(suggestion.hash); })
+            .map(function (suggestion) {
+                return Object.assign({}, candidates.get(suggestion.hash), {
+                    tactic: suggestion.tactic || 'scenario'
+                });
+            })
             .slice(0, TOP_K);
-        this.elements.suggestionList.replaceChildren();
+        const next = this.suggestions.length > 0 ?
+            stabilizeSuggestionSlots(this.suggestions, resolved, TOP_K) : resolved;
+        const sameOrder = next.length === this.suggestions.length && next.every((candidate, index) => {
+            return this.suggestions[index] && this.suggestions[index].hash === candidate.hash;
+        });
+        this.suggestions = next;
+        this.suggestionsFinal = Boolean(final);
+        this.suggestionSource = source || '';
         this.elements.suggestionStage.textContent = final ? (source === 'model' ? 'AI' : 'быстрый результат') : 'черновик';
 
         if (this.suggestions.length === 0) {
@@ -969,25 +1253,108 @@ class AiController {
             return;
         }
 
-        this.suggestions.forEach(function (suggestion, index) {
-            const button = document.createElement('button');
-            button.className = 'button ai-suggestion' + (final ? ' is-final' : ' is-provisional');
-            button.dataset.hash = suggestion.hash;
+        const existing = new Map(Array.from(this.elements.suggestionList.querySelectorAll('.ai-suggestion'))
+            .map(function (button) { return [button.dataset.hash, button]; }));
+        const buttons = this.suggestions.map((suggestion, index) => {
+            const button = existing.get(suggestion.hash) || document.createElement('button');
+            this.updateSuggestionButton(button, suggestion, index, final);
+            return button;
+        });
+        if (!sameOrder || existing.size !== buttons.length) {
+            this.elements.suggestionList.replaceChildren(...buttons);
+        }
+        this.captureSuggestionSnapshot();
+    }
 
-            const key = document.createElement('span');
+    updateSuggestionButton(button, suggestion, index, final) {
+        button.className = 'button ai-suggestion' + (final ? ' is-final' : ' is-provisional');
+        button.dataset.hash = suggestion.hash;
+        let key = button.querySelector('.ai-suggestion-key');
+        let text = button.querySelector('.ai-suggestion-text');
+        let tactic = button.querySelector('.ai-suggestion-tactic');
+        if (!key) {
+            key = document.createElement('span');
             key.className = 'ai-suggestion-key';
-            key.textContent = String(index + 1);
-            const text = document.createElement('span');
+            text = document.createElement('span');
             text.className = 'ai-suggestion-text';
-            text.textContent = suggestion.text;
+            tactic = document.createElement('span');
+            tactic.className = 'ai-suggestion-tactic';
+            button.append(key, text, tactic);
+        }
+        const labels = {
+            opening: 'вход',
+            direct: 'ответ',
+            counter: 'встречный',
+            repair: 'уточнение',
+            neutral: 'нейтрально',
+            scenario: 'сценарий',
+            escalation: 'нажим',
+            callback: 'callback',
+            exit: 'выход'
+        };
+        key.textContent = String(index + 1);
+        text.textContent = suggestion.text;
+        tactic.textContent = labels[suggestion.tactic] || suggestion.tactic || '';
+    }
 
-            button.append(key, text);
-            this.elements.suggestionList.appendChild(button);
-        }, this);
+    suggestionSnapshotHistory(turn, pageHash) {
+        if (!turn || !(turn.suggestionSnapshots instanceof Map)) {
+            return [];
+        }
+        const stored = turn.suggestionSnapshots.get(pageHash);
+        return Array.isArray(stored) ? stored.slice() : stored ? [stored] : [];
+    }
+
+    boundedSuggestionSnapshots(snapshots) {
+        const history = Array.isArray(snapshots) ? snapshots : [];
+        const firstVisible = history.find(function (snapshot) { return snapshot.visible; });
+        const tail = history.filter(function (snapshot) { return snapshot !== firstVisible; })
+            .slice(-(MAX_SUGGESTION_SNAPSHOTS - (firstVisible ? 1 : 0)));
+        return (firstVisible ? [firstVisible].concat(tail) : tail).sort(function (left, right) {
+            return String(left.shownAt).localeCompare(String(right.shownAt));
+        });
+    }
+
+    captureSuggestionSnapshot() {
+        if (!this.currentItemId || this.suggestions.length === 0) {
+            return;
+        }
+        const turn = this.turns.get(this.currentItemId);
+        const page = this.getPage();
+        if (!turn || !page || turn.pageHash !== page.pageHash) {
+            return;
+        }
+        if (!(turn.suggestionSnapshots instanceof Map)) {
+            turn.suggestionSnapshots = new Map();
+        }
+        const snapshot = {
+            pageHash: page.pageHash,
+            ids: this.suggestions.map(function (suggestion) { return suggestion.hash; }),
+            source: this.suggestionSource,
+            final: this.suggestionsFinal,
+            visible: this.mode === 'ai',
+            shownAt: new Date().toISOString(),
+            revision: turn.revision,
+            callState: sanitizeCallState(this.callState)
+        };
+        const history = this.suggestionSnapshotHistory(turn, page.pageHash);
+        const previous = history.at(-1);
+        const unchanged = previous && previous.visible === snapshot.visible && previous.final === snapshot.final &&
+            previous.source === snapshot.source && previous.revision === snapshot.revision &&
+            (Array.isArray(previous.ids) ? previous.ids : []).join('\u0000') === snapshot.ids.join('\u0000');
+        if (!unchanged) {
+            history.push(snapshot);
+            turn.suggestionSnapshots.set(page.pageHash, this.boundedSuggestionSnapshots(history));
+        }
+        if (turn.completed) {
+            this.saveFeedback(turn);
+        }
     }
 
     clearSuggestions(message) {
         this.suggestions = [];
+        this.suggestionsFinal = false;
+        this.suggestionSource = '';
         this.elements.suggestionStage.textContent = '';
         this.elements.suggestionList.replaceChildren();
         const empty = document.createElement('div');
@@ -1015,20 +1382,63 @@ class AiController {
             return;
         }
 
+        const now = Date.now();
+        turn.feedbackEligible = true;
+        const snapshots = this.suggestionSnapshotHistory(turn, page.pageHash);
+        const snapshot = snapshots.find(function (item) { return item.visible; }) || null;
+        const suggestionsWereVisible = this.mode === 'ai' && this.suggestions.length > 0;
+        const suggestedIds = suggestionsWereVisible ? this.suggestions.map(function (item) { return item.hash; }) : [];
         const playedKey = page.pageHash + '\u0000' + hash;
-        turn.played.set(playedKey, {
+        const event = {
+            hash: hash,
+            blockHash: hash,
+            text: text,
+            pageHash: page.pageHash,
+            character: page.pageName || page.pageHash,
+            suggestedIds: suggestedIds,
+            outsideTopK: suggestionsWereVisible ? !suggestedIds.includes(hash) : null,
+            clickedAt: new Date(now).toISOString(),
+            playedAt: new Date(now).toISOString(),
+            clickLatencyMs: Math.max(0, now - turn.startedAt),
+            postSpeechLatencyMs: turn.stoppedAt ? Math.max(0, now - turn.stoppedAt) : null,
+            suggestionLatencyMs: snapshot && snapshot.shownAt ?
+                Math.max(0, Date.parse(snapshot.shownAt) - turn.startedAt) : null,
+            source: suggestionsWereVisible ? this.suggestionSource : '',
+            final: suggestionsWereVisible ? this.suggestionsFinal : false,
+            repeatCount: 1,
+            callState: sanitizeCallState(this.callState)
+        };
+        if (!Array.isArray(turn.playedEvents)) {
+            turn.playedEvents = [];
+        }
+        turn.playedEvents.push({
             hash: hash,
             text: text,
             pageHash: page.pageHash,
-            character: page.pageName || page.pageHash
+            character: page.pageName || page.pageHash,
+            playedAt: event.playedAt
         });
+        const existing = turn.played.get(playedKey);
+        if (existing) {
+            existing.repeatCount = (existing.repeatCount || 1) + 1;
+            const existingStrength = existing.outsideTopK === true ? 2 : existing.outsideTopK === false ? 1 : 0;
+            const eventStrength = event.outsideTopK === true ? 2 : event.outsideTopK === false ? 1 : 0;
+            if (eventStrength > existingStrength) {
+                const repeatCount = existing.repeatCount;
+                Object.assign(existing, event, {repeatCount: repeatCount});
+            }
+        } else {
+            turn.played.set(playedKey, event);
+        }
         if (turn.completed) {
             this.saveFeedback(turn);
         }
     }
 
     saveFeedback(turn) {
-        if (!turn || !turn.completed || turn.played.size === 0 || !turn.context) {
+        const rootTurnId = this.feedbackRootId(turn);
+        if (!turn || !turn.completed || !turn.context || turn.feedbackEligible === false ||
+            this.feedbackTombstones.has(rootTurnId)) {
             return;
         }
 
@@ -1040,24 +1450,65 @@ class AiController {
             if (!byPage.has(item.pageHash)) {
                 byPage.set(item.pageHash, []);
             }
-            byPage.get(item.pageHash).push(item.hash);
+            byPage.get(item.pageHash).push(item);
         });
+        if (turn.suggestionSnapshots instanceof Map) {
+            turn.suggestionSnapshots.forEach(function (snapshots, pageHash) {
+                if (!byPage.has(pageHash)) {
+                    byPage.set(pageHash, []);
+                }
+            });
+        }
+        if (turn.pageHash && !byPage.has(turn.pageHash)) {
+            byPage.set(turn.pageHash, []);
+        }
 
-        byPage.forEach((blockHashes, pageHash) => {
+        byPage.forEach((selections, pageHash) => {
+            const snapshots = this.suggestionSnapshotHistory(turn, pageHash);
             const payload = {
-                turnId: turn.turnId + '\u0000' + pageHash,
-                rootTurnId: turn.turnId,
+                turnId: rootTurnId + '\u0000' + pageHash,
+                rootTurnId: rootTurnId,
                 pageHash: pageHash,
                 scenarioId: turn.scenarioId,
+                transcript: turn.finalTranscript,
                 context: turn.context,
-                blockHashes: blockHashes
+                selections: selections,
+                suggestionSnapshots: snapshots,
+                callState: turn.callState || this.callState,
+                nextTranscript: turn.nextTranscript,
+                startedAt: new Date(turn.startedAt || Date.now()).toISOString(),
+                completedAt: new Date(turn.stoppedAt || Date.now()).toISOString()
             };
+            if (!(turn.feedbackSignatures instanceof Map)) {
+                turn.feedbackSignatures = new Map();
+            }
+            const signature = JSON.stringify({
+                transcript: payload.transcript,
+                context: payload.context,
+                selections: payload.selections,
+                suggestionSnapshots: payload.suggestionSnapshots,
+                callState: payload.callState,
+                nextTranscript: payload.nextTranscript
+            });
+            if (turn.feedbackSignatures.get(pageHash) === signature) {
+                return;
+            }
+            turn.feedbackSignatures.set(pageHash, signature);
 
             this.feedbackQueue = this.feedbackQueue
                 .then(() => this.ipcRenderer.invoke('ai:feedback:save', payload))
                 .then((stats) => this.renderFeedbackStats(stats))
-                .catch(() => this.notify('Не удалось сохранить AI-пример', true, 2000));
+                .catch(() => {
+                    if (turn.feedbackSignatures.get(pageHash) === signature) {
+                        turn.feedbackSignatures.delete(pageHash);
+                    }
+                    this.notify('Не удалось сохранить AI-пример', true, 2000);
+                });
         });
+    }
+
+    feedbackRootId(turn) {
+        return turn && (turn.feedbackRootId || turn.turnId) || '';
     }
 
     flushFeedback() {
@@ -1070,16 +1521,50 @@ class AiController {
     }
 
     renderFeedbackStats(stats) {
-        this.elements.feedbackCount.textContent = 'Примеров: ' + stats.unique + ' · выборов: ' + stats.selections;
-        document.querySelector('#ai-feedback-undo').disabled = stats.turns === 0;
-        document.querySelector('#ai-feedback-clear').disabled = stats.unique === 0;
+        const result = stats && stats.stats ? stats.stats : stats || {};
+        const unique = Number(result.unique) || 0;
+        const selections = Number(result.selections) || 0;
+        const observations = Number(result.observations) || 0;
+        const turns = Number(result.turns) || 0;
+        this.elements.feedbackCount.textContent = 'Примеров: ' + unique + ' · выборов: ' + selections +
+            ' · ходов: ' + observations;
+        document.querySelector('#ai-feedback-undo').disabled = turns === 0;
+        document.querySelector('#ai-feedback-clear').disabled = unique === 0 && observations === 0;
+    }
+
+    latestLocalFeedbackTurnId() {
+        const turns = Array.from(this.turns.values()).filter((turn) => {
+            return turn && turn.completed && turn.context && turn.played instanceof Map && turn.played.size > 0 &&
+                !this.feedbackTombstones.has(this.feedbackRootId(turn));
+        }).sort(function (left, right) {
+            return (Number(left.startedAt) || 0) - (Number(right.startedAt) || 0);
+        });
+        return turns.length > 0 ? this.feedbackRootId(turns.at(-1)) : '';
     }
 
     async undoFeedback() {
         await this.feedbackQueue;
-        const stats = await this.ipcRenderer.invoke('ai:feedback:undo');
-        this.renderFeedbackStats(stats);
-        this.notify('Последняя обучающая реплика отменена', false, 1800);
+        const fallbackTurnId = this.latestLocalFeedbackTurnId();
+        if (fallbackTurnId) {
+            this.feedbackTombstones.add(fallbackTurnId);
+        }
+        try {
+            const stats = await this.ipcRenderer.invoke('ai:feedback:undo');
+            const rootTurnId = String(stats && stats.rootTurnId || fallbackTurnId);
+            if (fallbackTurnId && rootTurnId && fallbackTurnId !== rootTurnId) {
+                this.feedbackTombstones.delete(fallbackTurnId);
+            }
+            if (rootTurnId) {
+                this.feedbackTombstones.add(rootTurnId);
+            }
+            this.renderFeedbackStats(stats);
+            this.notify('Последняя обучающая реплика отменена', false, 1800);
+        } catch {
+            if (fallbackTurnId) {
+                this.feedbackTombstones.delete(fallbackTurnId);
+            }
+            this.notify('Не удалось отменить последнюю обучающую реплику', true, 2000);
+        }
     }
 
     async clearFeedback() {
@@ -1087,10 +1572,36 @@ class AiController {
             return;
         }
 
+        const addedTombstones = [];
+        this.feedbackEpoch += 1;
+        this.turns.forEach((turn) => {
+            const rootTurnId = this.feedbackRootId(turn);
+            if (turn.completed && !this.feedbackTombstones.has(rootTurnId)) {
+                this.feedbackTombstones.add(rootTurnId);
+                addedTombstones.push(rootTurnId);
+            }
+            if (turn.itemId === this.currentItemId && !turn.closed) {
+                turn.feedbackEpoch = this.feedbackEpoch;
+                turn.feedbackRootId = turn.turnId + ':feedback:' + this.feedbackEpoch;
+                turn.feedbackEligible = true;
+                turn.played = new Map();
+                turn.playedEvents = [];
+                turn.suggestionSnapshots = new Map();
+                turn.feedbackSignatures = new Map();
+                turn.nextTranscript = '';
+            }
+        });
+        this.feedbackQueue = this.feedbackQueue
+            .then(() => this.ipcRenderer.invoke('ai:feedback:clear'))
+            .then((stats) => {
+                this.renderFeedbackStats(stats);
+                this.notify('AI-примеры очищены', false, 1800);
+            })
+            .catch(() => {
+                addedTombstones.forEach((turnId) => this.feedbackTombstones.delete(turnId));
+                this.notify('Не удалось очистить AI-примеры', true, 2000);
+            });
         await this.feedbackQueue;
-        const stats = await this.ipcRenderer.invoke('ai:feedback:clear');
-        this.renderFeedbackStats(stats);
-        this.notify('AI-примеры очищены', false, 1800);
     }
 
     async indexCurrentPage() {
@@ -1159,7 +1670,7 @@ class AiController {
     migratePage(oldHash, newHash) {
         this.ipcRenderer.invoke('ai:page:migrate', {oldHash: oldHash, newHash: newHash});
         const page = this.getPage();
-        this.turns.forEach(function (turn) {
+        this.turns.forEach((turn) => {
             if (turn.pageHash === oldHash) {
                 turn.pageHash = newHash;
             }
@@ -1172,6 +1683,25 @@ class AiController {
                 migrated.set(item.pageHash + '\u0000' + item.hash, item);
             });
             turn.played = migrated;
+            if (Array.isArray(turn.playedEvents)) {
+                turn.playedEvents.forEach(function (item) {
+                    if (item.pageHash === oldHash) {
+                        item.pageHash = newHash;
+                        item.character = page && page.pageHash === newHash ? page.pageName || newHash : item.character;
+                    }
+                });
+            }
+            if (turn.suggestionSnapshots instanceof Map && turn.suggestionSnapshots.has(oldHash)) {
+                const snapshots = this.suggestionSnapshotHistory(turn, oldHash);
+                turn.suggestionSnapshots.delete(oldHash);
+                snapshots.forEach(function (snapshot) { snapshot.pageHash = newHash; });
+                turn.suggestionSnapshots.set(newHash, snapshots);
+            }
+            if (turn.feedbackSignatures instanceof Map && turn.feedbackSignatures.has(oldHash)) {
+                const signature = turn.feedbackSignatures.get(oldHash);
+                turn.feedbackSignatures.delete(oldHash);
+                turn.feedbackSignatures.set(newHash, signature);
+            }
         });
     }
 
@@ -1193,6 +1723,11 @@ class AiController {
     }
 
     clearConversation() {
+        clearTimeout(this.provisionalTimer);
+        clearTimeout(this.finalDeadlineTimer);
+        this.provisionalTimer = null;
+        this.finalDeadlineTimer = null;
+        this.acceptTranscriptionEvents = false;
         this.tracker.clear();
         this.turns.clear();
         this.turnOrder = [];
@@ -1201,15 +1736,20 @@ class AiController {
         this.rankInFlight = false;
         this.pendingProvisional = null;
         this.pendingFinal = null;
+        this.feedbackTombstones.clear();
+        this.feedbackEpoch = 0;
         this.sessionId = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
+        this.callState = createCallState();
         this.resetBilling();
         this.renderTranscript('', false);
+        this.renderCallState();
         this.clearSuggestions();
         this.setStatus('stopped');
     }
 
     async destroy() {
         this.flushFeedback();
+        await this.feedbackQueue;
         this.aiEnabled = false;
         this.mode = 'deck';
         await this.stopCapture();

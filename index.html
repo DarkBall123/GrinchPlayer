@@ -194,6 +194,7 @@
                 <span class="ai-status-dot"></span>
                 <span class="ai-status-text">AI выключен</span>
                 <span class="ai-session-cost"></span>
+                <button class="button is-small" id="ai-new-call" title="Новый звонок: очистить контекст" aria-label="Новый звонок"><i class="fa fa-refresh"></i></button>
                 <button class="button is-small" id="ai-pause" title="Поставить AI на паузу" aria-label="Поставить AI на паузу"><i class="fa fa-pause"></i></button>
                 <button class="button is-small open-ai-settings" title="Настройки OpenAI"><i class="fa fa-gear"></i></button>
             </div>
@@ -208,12 +209,13 @@
                             <option value="">Создайте сценарий</option>
                         </select>
                         <button class="button is-small" id="ai-scenario-new" title="Новый сценарий"><i class="fa fa-plus"></i></button>
+                        <button class="button is-small" id="ai-scenario-template" title="Вставить карту звонка"><i class="fa fa-list-alt"></i></button>
                         <button class="button is-small" id="ai-scenario-save" title="Сохранить сценарий"><i class="fa fa-floppy-o"></i></button>
                         <button class="button is-small" id="ai-scenario-delete" title="Удалить сценарий"><i class="fa fa-trash"></i></button>
                     </div>
                     <input class="input" id="ai-scenario-name" maxlength="80" placeholder="Название сценария">
                     <textarea class="textarea" id="ai-scenario-prompt" maxlength="12000" rows="4"
-                              placeholder="Роль, легенда, цель, этапы и стиль пранка"></textarea>
+                              placeholder="Легенда, цель, факты, этапы, триггеры, запреты и колбэки"></textarea>
                 </div>
             </details>
             <div class="ai-device">
@@ -227,6 +229,7 @@
             <div class="ai-transcript">
                 <div class="ai-section-title">Собеседник</div>
                 <div class="ai-transcript-text" id="ai-transcript-text">Ожидаю речь…</div>
+                <div class="ai-call-state" id="ai-call-state">Этап: вход</div>
             </div>
             <div class="ai-suggestions">
                 <div class="ai-section-title">

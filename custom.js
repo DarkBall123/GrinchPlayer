@@ -2578,12 +2578,25 @@ function pickNextTrainingSound() {
 //                    //
 // ================== //
 
-// Do actions before window is closed or reloaded
+// Persist ordinary application data even if Chromium reloads the renderer.
 window.addEventListener('beforeunload', function () {
-    if (aiController) {
-        aiController.destroy();
-    }
     saveAllData(true);
+});
+
+let preparingWindowClose = false;
+ipcRenderer.on('window:prepare-close', async function () {
+    if (preparingWindowClose) {
+        return;
+    }
+    preparingWindowClose = true;
+    saveAllData(true);
+    try {
+        if (aiController) {
+            await aiController.destroy();
+        }
+    } finally {
+        ipcRenderer.send('window:close-ready');
+    }
 });
 
 // ================================= //

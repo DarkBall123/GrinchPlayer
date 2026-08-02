@@ -35,6 +35,8 @@ aiService.register(ipcMain);
 // Prevent variables from being garbage collected
 let mainWindow;
 const bounds = config.get('bounds') || {};
+const closeReady = new WeakSet();
+const closeTimers = new WeakMap();
 
 function getWindow(event) {
     return BrowserWindow.fromWebContents(event.sender);
@@ -71,6 +73,17 @@ ipcMain.on('window:toggle-maximize', function (event) {
 
 ipcMain.on('window:close', function (event) {
     getWindow(event).close();
+});
+
+ipcMain.on('window:close-ready', function (event) {
+    const win = getWindow(event);
+    const timer = closeTimers.get(win);
+    if (timer) {
+        clearTimeout(timer);
+        closeTimers.delete(win);
+    }
+    closeReady.add(win);
+    win.close();
 });
 
 function boundsAreVisible(savedBounds) {
@@ -113,8 +126,19 @@ const createMainWindow = async () => {
         win.show();
     });
 
-    win.on('close', () => {
+    win.on('close', (event) => {
         config.set('bounds', win.getBounds());
+        if (!closeReady.has(win) && !win.webContents.isDestroyed()) {
+            event.preventDefault();
+            if (!closeTimers.has(win)) {
+                win.webContents.send('window:prepare-close');
+                closeTimers.set(win, setTimeout(function () {
+                    closeTimers.delete(win);
+                    closeReady.add(win);
+                    win.close();
+                }, 12000));
+            }
+        }
     });
 
     win.on('closed', () => {

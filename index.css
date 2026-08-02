@@ -13539,7 +13539,7 @@ input[type=number]::-webkit-outer-spin-button {
 
 .ai-status {
   display: grid;
-  grid-template-columns: 10px minmax(0, 1fr) auto 28px 28px;
+  grid-template-columns: 10px minmax(0, 1fr) auto 28px 28px 28px;
   align-items: center;
   gap: 7px;
   min-height: 40px;
@@ -13648,7 +13648,7 @@ input[type=number]::-webkit-outer-spin-button {
 
 .ai-scenario-picker {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) repeat(3, 28px);
+  grid-template-columns: minmax(0, 1fr) repeat(4, 28px);
   gap: 4px;
 }
 .ai-scenario-picker .button {
@@ -13718,6 +13718,15 @@ input[type=number]::-webkit-outer-spin-button {
   color: hsl(0, 0%, 100%);
 }
 
+.ai-call-state {
+  margin-top: 5px;
+  overflow: hidden;
+  color: #5cb85c;
+  font-size: 0.66rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .ai-suggestions {
   min-height: 0;
   flex: 1;
@@ -13738,10 +13747,9 @@ input[type=number]::-webkit-outer-spin-button {
 
 .button.ai-suggestion {
   display: grid;
-  grid-template-columns: 28px minmax(0, 1fr);
+  grid-template-columns: 28px minmax(0, 1fr) auto;
   width: 100%;
-  min-height: 42px;
-  height: auto;
+  height: 50px;
   padding: 0;
   overflow: hidden;
   color: hsl(0, 0%, 100%);
@@ -13773,11 +13781,26 @@ input[type=number]::-webkit-outer-spin-button {
 }
 
 .ai-suggestion-text {
+  display: -webkit-box;
   align-self: center;
   padding: 6px 8px;
   overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
   line-height: 1.15;
   text-align: left;
+}
+
+.ai-suggestion-tactic {
+  align-self: center;
+  margin-right: 6px;
+  padding: 2px 5px;
+  color: #8694a4;
+  font-size: 0.58rem;
+  line-height: 1;
+  white-space: nowrap;
+  background: rgba(4%, 4%, 4%, 0.2);
+  border-radius: 2px;
 }
 
 .ai-empty {
