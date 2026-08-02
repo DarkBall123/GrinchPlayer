@@ -757,6 +757,8 @@ test('model ranking schema requests the available top-k from existing ids', asyn
     assert.equal(requestBody.input[1].content[0].text.includes('САМАЯ НОВАЯ РЕПЛИКА'), true);
     assert.equal(requestBody.input[0].content[0].text.includes('Ничего не сочиняй'), true);
     assert.equal(requestBody.input[0].content[0].text.includes('абсурдной петли'), true);
+    assert.equal(requestBody.input[0].content[0].text.includes('две-три разные жёсткие фразы'), true);
+    assert.equal(requestBody.input[0].content[0].text.includes('Мат тоже не сочиняй'), true);
     assert.equal(requestBody.input[0].content[0].text.includes('scenario.plan.facts каноничны'), true);
 });
 
