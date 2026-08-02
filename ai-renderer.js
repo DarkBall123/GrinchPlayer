@@ -737,8 +737,7 @@ class AiController {
             .map((itemId) => this.turns.get(itemId))
             .filter(function (candidate) {
                 return candidate && candidate.itemId !== turn.itemId && candidate.completed &&
-                    candidate.startedAt <= turn.startedAt && candidate.pageHash === turn.pageHash &&
-                    candidate.scenarioId === turn.scenarioId;
+                    candidate.startedAt <= turn.startedAt && candidate.scenarioId === turn.scenarioId;
             })
             .map((candidate) => ({
                 turnId: candidate.turnId,
@@ -815,6 +814,7 @@ class AiController {
                 transcript: transcript,
                 context: context,
                 scenario: scenario,
+                pageName: page.pageName || page.pageHash,
                 history: history,
                 played: Array.from(turn.played.values()),
                 candidates: page.candidates,
@@ -949,7 +949,13 @@ class AiController {
             return;
         }
 
-        turn.played.set(hash, {hash: hash, text: text});
+        const playedKey = page.pageHash + '\u0000' + hash;
+        turn.played.set(playedKey, {
+            hash: hash,
+            text: text,
+            pageHash: page.pageHash,
+            character: page.pageName || page.pageHash
+        });
         if (turn.completed) {
             this.saveFeedback(turn);
         }
@@ -960,18 +966,32 @@ class AiController {
             return;
         }
 
-        const payload = {
-            turnId: turn.turnId,
-            pageHash: turn.pageHash,
-            scenarioId: turn.scenarioId,
-            context: turn.context,
-            blockHashes: Array.from(turn.played.keys())
-        };
+        const byPage = new Map();
+        turn.played.forEach(function (item) {
+            if (!item.pageHash) {
+                return;
+            }
+            if (!byPage.has(item.pageHash)) {
+                byPage.set(item.pageHash, []);
+            }
+            byPage.get(item.pageHash).push(item.hash);
+        });
 
-        this.feedbackQueue = this.feedbackQueue
-            .then(() => this.ipcRenderer.invoke('ai:feedback:save', payload))
-            .then((stats) => this.renderFeedbackStats(stats))
-            .catch(() => this.notify('Не удалось сохранить AI-пример', true, 2000));
+        byPage.forEach((blockHashes, pageHash) => {
+            const payload = {
+                turnId: turn.turnId + '\u0000' + pageHash,
+                rootTurnId: turn.turnId,
+                pageHash: pageHash,
+                scenarioId: turn.scenarioId,
+                context: turn.context,
+                blockHashes: blockHashes
+            };
+
+            this.feedbackQueue = this.feedbackQueue
+                .then(() => this.ipcRenderer.invoke('ai:feedback:save', payload))
+                .then((stats) => this.renderFeedbackStats(stats))
+                .catch(() => this.notify('Не удалось сохранить AI-пример', true, 2000));
+        });
     }
 
     flushFeedback() {
@@ -1025,8 +1045,9 @@ class AiController {
         }
 
         this.flushFeedback();
-        this.clearConversation();
-        if (!this.getPage()) {
+        const page = this.getPage();
+        if (!page) {
+            this.clearSuggestions('Откройте страницу со звуками');
             await this.stopCapture();
             this.setStatus('error', 'Откройте страницу со звуками');
             return;
@@ -1037,15 +1058,52 @@ class AiController {
             return;
         }
 
-        await this.restartCapture();
+        const turn = this.turns.get(this.currentItemId);
+        const characterChanged = turn && turn.pageHash !== page.pageHash;
+        if (characterChanged) {
+            turn.pageHash = page.pageHash;
+            turn.revision += 1;
+            turn.rankingSettled = false;
+            this.pendingProvisional = null;
+            this.pendingFinal = null;
+            this.lastProvisionalAt = 0;
+            this.clearSuggestions('Переключаю персонажа…');
+        }
+
+        await this.indexCurrentPage();
+        if (!this.captureActive && !this.starting) {
+            await this.startCapture();
+        }
+
+        if (!characterChanged) {
+            return;
+        }
+
+        const hasFinalTranscript = turn.completed && normalizeText(turn.finalTranscript);
+        if (hasFinalTranscript) {
+            turn.deadlineExpired = true;
+            this.requestRanking(turn, true);
+        } else if (normalizeText(turn.transcript)) {
+            this.requestRanking(turn, false);
+        }
     }
 
     migratePage(oldHash, newHash) {
         this.ipcRenderer.invoke('ai:page:migrate', {oldHash: oldHash, newHash: newHash});
+        const page = this.getPage();
         this.turns.forEach(function (turn) {
             if (turn.pageHash === oldHash) {
                 turn.pageHash = newHash;
             }
+            const migrated = new Map();
+            turn.played.forEach(function (item) {
+                if (item.pageHash === oldHash) {
+                    item.pageHash = newHash;
+                    item.character = page && page.pageHash === newHash ? page.pageName || newHash : item.character;
+                }
+                migrated.set(item.pageHash + '\u0000' + item.hash, item);
+            });
+            turn.played = migrated;
         });
     }
 

@@ -509,6 +509,7 @@ class AiService {
         const embedding = existingLog && existingLog.embedding ? existingLog.embedding : (await this.embedTexts([context]))[0];
         const updated = saveTurnFeedback(state, {
             turnId: payload.turnId,
+            rootTurnId: payload.rootTurnId,
             scenarioId: payload.scenarioId,
             pageHash: payload.pageHash,
             scopeId: feedbackScopeId(payload.pageHash, payload.scenarioId),
@@ -526,7 +527,9 @@ class AiService {
         return {
             unique: state.examples.length,
             selections: state.examples.reduce(function (sum, example) { return sum + example.count; }, 0),
-            turns: state.turnLog.length
+            turns: new Set(state.turnLog.map(function (turn) {
+                return turn.rootTurnId || turn.turnId;
+            })).size
         };
     }
 
@@ -558,14 +561,16 @@ class AiService {
                         return {
                             hash: String(item && typeof item === 'object' ? item.hash || '' : ''),
                             text: normalizeText(item && typeof item === 'object' ? item.text : item),
-                            pageHash: String(item && typeof item === 'object' ? item.pageHash || '' : '')
+                            pageHash: String(item && typeof item === 'object' ? item.pageHash || '' : ''),
+                            character: normalizeText(item && typeof item === 'object' ? item.character : '')
                         };
                     })
                     .filter(function (item) {
-                        if (!item.hash || !item.text || seen.has(item.hash)) {
+                        const key = item.pageHash + '\u0000' + item.hash;
+                        if (!item.hash || !item.text || seen.has(key)) {
                             return false;
                         }
-                        seen.add(item.hash);
+                        seen.add(key);
                         return true;
                     });
 
@@ -579,14 +584,19 @@ class AiService {
             .slice(-500);
     }
 
-    recentPlayedHashes(history, currentPlayed) {
+    recentPlayedHashes(history, currentPlayed, pageHash) {
         const hashes = [];
         history.slice(-3).forEach(function (turn) {
-            turn.played.forEach(function (item) { hashes.push(item.hash); });
+            turn.played.forEach(function (item) {
+                if (!item.pageHash || item.pageHash === pageHash) {
+                    hashes.push(item.hash);
+                }
+            });
         });
         (Array.isArray(currentPlayed) ? currentPlayed : []).forEach(function (item) {
             const hash = String(item && typeof item === 'object' ? item.hash || '' : item || '');
-            if (hash) {
+            const itemPageHash = String(item && typeof item === 'object' ? item.pageHash || '' : '');
+            if (hash && (!itemPageHash || itemPageHash === pageHash)) {
                 hashes.push(hash);
             }
         });
@@ -634,7 +644,9 @@ class AiService {
     playedHistory(history) {
         const byHash = new Map();
         history.forEach(function (turn) {
-            turn.played.forEach(function (item) { byHash.set(item.hash, item); });
+            turn.played.forEach(function (item) {
+                byHash.set(item.pageHash + '\u0000' + item.hash, item);
+            });
         });
         return Array.from(byHash.values()).slice(-100);
     }
@@ -643,6 +655,7 @@ class AiService {
         const pageHash = String(payload.pageHash || '');
         const candidates = this.sanitizeCandidates(payload.candidates, pageHash);
         const transcript = normalizeText(payload.transcript);
+        const pageName = normalizeText(payload.pageName).slice(0, 100);
         const scenario = this.sanitizeScenario(payload.scenario);
         const history = this.sanitizeHistory(payload.history);
         const context = buildContextText(history, transcript);
@@ -656,13 +669,13 @@ class AiService {
 
         const pages = this.indexStore.get('pages') || {};
         const entries = pages[pageHash] ? pages[pageHash].entries : {};
-        const feedbackQuery = scenario.prompt + '\n' + context;
+        const feedbackQuery = scenario.prompt + '\nТекущий персонаж: ' + (pageName || pageHash) + '\n' + context;
         const queryEmbeddings = await this.embedTexts([transcript, scenario.prompt, feedbackQuery]);
         const currentEmbedding = queryEmbeddings[0];
         const scenarioEmbedding = queryEmbeddings[1];
         const feedbackEmbedding = queryEmbeddings[2];
         const examples = this.getFeedbackState().examples;
-        const recentHashes = this.recentPlayedHashes(history, payload.played);
+        const recentHashes = this.recentPlayedHashes(history, payload.played, pageHash);
         const semantic = rankScenarioCandidates(
             candidates,
             entries,
@@ -702,6 +715,7 @@ class AiService {
                     const recentHistory = selectRecentHistory(history, RECENT_HISTORY_LIMIT);
                     return this.rankWithModel(Object.assign({}, payload, {
                         scenario: scenario,
+                        currentCharacter: {id: pageHash, name: pageName || pageHash},
                         currentTranscript: transcript,
                         recentHistory: recentHistory,
                         relevantHistory: relevantHistory,
@@ -778,6 +792,7 @@ class AiService {
                     type: 'input_text',
                     text: JSON.stringify({
                         scenario: payload.scenario,
+                        currentCharacter: payload.currentCharacter,
                         currentUtterance: payload.currentTranscript,
                         recentConversation: payload.recentHistory,
                         relevantEarlierConversation: payload.relevantHistory,

@@ -103,3 +103,32 @@ test('feedback is isolated by both character page and prank scenario', function 
     assert.equal(state.examples.length, 3);
     assert.equal(new Set(state.examples.map(function (example) { return example.scopeId; })).size, 3);
 });
+
+test('undo removes all character selections from the same conversation turn', function () {
+    let state = createFeedbackState();
+    state = saveTurnFeedback(state, {
+        turnId: 'root-turn\u0000character-a',
+        rootTurnId: 'root-turn',
+        pageHash: 'character-a',
+        scenarioId: 'scenario',
+        context: 'общая реплика',
+        blockHashes: ['sound-a'],
+        embedding: [1],
+        updatedAt: '2026-01-01T00:00:00.000Z'
+    });
+    state = saveTurnFeedback(state, {
+        turnId: 'root-turn\u0000character-b',
+        rootTurnId: 'root-turn',
+        pageHash: 'character-b',
+        scenarioId: 'scenario',
+        context: 'общая реплика',
+        blockHashes: ['sound-b'],
+        embedding: [1],
+        updatedAt: '2026-01-01T00:00:01.000Z'
+    });
+
+    assert.equal(state.examples.length, 2);
+    state = undoLastTurn(state);
+    assert.equal(state.examples.length, 0);
+    assert.equal(state.turnLog.length, 0);
+});

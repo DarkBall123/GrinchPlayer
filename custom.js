@@ -541,7 +541,11 @@ function getAiPage() {
         }
     });
 
-    return candidates.length > 0 ? {pageHash: currentTab, candidates: candidates} : null;
+    return candidates.length > 0 ? {
+        pageHash: currentTab,
+        pageName: page.name || currentTab,
+        candidates: candidates
+    } : null;
 }
 
 function getAiBlockText(pageHash, blockHash) {

@@ -30,10 +30,6 @@ function cosineSimilarity(left, right) {
     return dot / Math.sqrt(leftNorm * rightNorm);
 }
 
-function playedText(item) {
-    return normalizeText(item && typeof item === 'object' ? item.text : item);
-}
-
 function historyTurnText(turn) {
     const lines = [];
     const transcript = normalizeText(turn && turn.transcript);
@@ -41,10 +37,16 @@ function historyTurnText(turn) {
         lines.push('Собеседник: ' + transcript);
     }
 
-    const played = turn && Array.isArray(turn.played) ? turn.played.map(playedText).filter(Boolean) : [];
-    if (played.length > 0) {
-        lines.push('GrinchPlayer: ' + played.join(' / '));
-    }
+    const played = turn && Array.isArray(turn.played) ? turn.played : [];
+    played.forEach(function (item) {
+        const text = normalizeText(item && typeof item === 'object' ? item.text : item);
+        if (!text) {
+            return;
+        }
+
+        const character = normalizeText(item && typeof item === 'object' ? item.character : '');
+        lines.push('GrinchPlayer' + (character ? ' (' + character + ')' : '') + ': ' + text);
+    });
 
     return lines.join('\n');
 }

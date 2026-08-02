@@ -35,6 +35,7 @@ function saveTurnFeedback(currentState, payload, limit) {
     if (!log) {
         log = {
             turnId: payload.turnId,
+            rootTurnId: payload.rootTurnId || payload.turnId,
             scenarioId: payload.scenarioId || '',
             pageHash: payload.pageHash || '',
             keys: [],
@@ -89,22 +90,34 @@ function saveTurnFeedback(currentState, payload, limit) {
 
 function undoLastTurn(currentState) {
     const state = createFeedbackState(currentState);
-    const log = state.turnLog.pop();
+    const lastLog = state.turnLog.pop();
 
-    if (!log) {
+    if (!lastLog) {
         return state;
     }
 
-    log.keys.forEach(function (key) {
-        const index = state.examples.findIndex(function (example) { return example.id === key; });
-        if (index === -1) {
-            return;
+    const rootTurnId = lastLog.rootTurnId || lastLog.turnId;
+    const logs = [lastLog];
+    while (state.turnLog.length > 0) {
+        const previous = state.turnLog.at(-1);
+        if ((previous.rootTurnId || previous.turnId) !== rootTurnId) {
+            break;
         }
+        logs.push(state.turnLog.pop());
+    }
 
-        state.examples[index].count -= 1;
-        if (state.examples[index].count <= 0) {
-            state.examples.splice(index, 1);
-        }
+    logs.forEach(function (log) {
+        log.keys.forEach(function (key) {
+            const index = state.examples.findIndex(function (example) { return example.id === key; });
+            if (index === -1) {
+                return;
+            }
+
+            state.examples[index].count -= 1;
+            if (state.examples[index].count <= 0) {
+                state.examples.splice(index, 1);
+            }
+        });
     });
 
     return state;
@@ -133,6 +146,9 @@ function migratePageFeedback(currentState, oldHash, newHash) {
     state.turnLog.forEach(function (turn) {
         if (turn.pageHash === oldHash) {
             turn.pageHash = newHash;
+            if (turn.turnId.endsWith('\u0000' + oldHash)) {
+                turn.turnId = turn.turnId.slice(0, -oldHash.length) + newHash;
+            }
             turn.keys = turn.keys.map(function (key) { return migratedKeys.get(key) || key; });
         }
     });

@@ -8,6 +8,7 @@ const {
     buildScenarioShortlist,
     buildShortlist,
     cosineSimilarity,
+    historyTurnText,
     isCurrentRanking,
     rankScenarioCandidates,
     rankSemanticCandidates,
@@ -66,6 +67,19 @@ test('context contains ten previous exchanges and the current transcript', funct
     assert.equal(context.includes('реплика-2'), true);
     assert.equal(context.includes('GrinchPlayer: ответ-11'), true);
     assert.equal(context.endsWith('Собеседник: сейчас'), true);
+});
+
+test('shared conversation context identifies which character played each response', function () {
+    const text = historyTurnText({
+        transcript: 'Кто это говорит?',
+        played: [
+            {character: 'Банк', text: 'Служба безопасности'},
+            {character: 'Полиция', text: 'Откройте дверь'}
+        ]
+    });
+
+    assert.equal(text.includes('GrinchPlayer (Банк): Служба безопасности'), true);
+    assert.equal(text.includes('GrinchPlayer (Полиция): Откройте дверь'), true);
 });
 
 test('scenario ranking stays inside the supplied character page and penalizes recent sounds', function () {

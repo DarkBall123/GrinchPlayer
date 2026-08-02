@@ -163,6 +163,18 @@ test('candidate sanitizer caps one character page and overwrites foreign page me
     }), true);
 });
 
+test('recent-play penalty only uses responses from the current character', function () {
+    const service = new AiService({Store: MemoryStore, WebSocket: FakeWebSocket, fetch: async function () {}});
+    const hashes = service.recentPlayedHashes([{
+        played: [
+            {hash: 'bank-answer', pageHash: 'bank'},
+            {hash: 'police-answer', pageHash: 'police'}
+        ]
+    }], [{hash: 'bank-now', pageHash: 'bank'}], 'bank');
+
+    assert.deepEqual(hashes, ['bank-answer', 'bank-now']);
+});
+
 test('page index embeds only new, renamed or changed labels and removes stale entries', async function () {
     const embeddingRequests = [];
     const fakeFetch = async function (url, options) {
