@@ -132,3 +132,59 @@ test('transcript delta starts a turn without server VAD events', function () {
     assert.equal(controller.turns.get('server-turn').transcript, 'привет');
     assert.equal(rendered, 'привет');
 });
+
+test('pause stops capture and resumes without clearing conversation', async function () {
+    const controller = createController();
+    const icon = {className: ''};
+    controller.elements = {
+        pauseButton: {
+            title: '',
+            setAttribute: function () {},
+            querySelector: function () { return icon; }
+        }
+    };
+    controller.mode = 'ai';
+    controller.turns.set('turn', {itemId: 'turn'});
+    controller.turnOrder = ['turn'];
+    controller.currentItemId = 'turn';
+    controller.flushFeedback = function () {};
+    controller.setStatus = function () {};
+    let stopped = 0;
+    let started = 0;
+    controller.stopCapture = async function () { stopped += 1; };
+    controller.startCapture = async function () { started += 1; };
+
+    await controller.togglePause();
+    assert.equal(controller.paused, true);
+    assert.equal(stopped, 1);
+    assert.equal(icon.className, 'fa fa-play');
+    assert.equal(controller.turns.has('turn'), true);
+
+    await controller.togglePause();
+    assert.equal(controller.paused, false);
+    assert.equal(started, 1);
+    assert.equal(icon.className, 'fa fa-pause');
+    assert.equal(controller.turns.has('turn'), true);
+});
+
+test('switching to deck stops capture without clearing conversation', async function () {
+    const classList = {add: function () {}, remove: function () {}};
+    const controller = createController();
+    controller.mode = 'ai';
+    controller.elements = {
+        deck: {classList: classList},
+        aiTab: {classList: classList},
+        deckTab: {classList: classList}
+    };
+    controller.turns.set('turn', {itemId: 'turn'});
+    controller.turnOrder = ['turn'];
+    controller.currentItemId = 'turn';
+    controller.flushFeedback = function () {};
+    controller.stopCapture = async function () {};
+
+    await controller.showDeck();
+
+    assert.equal(controller.mode, 'deck');
+    assert.equal(controller.turns.has('turn'), true);
+    assert.equal(controller.currentItemId, 'turn');
+});

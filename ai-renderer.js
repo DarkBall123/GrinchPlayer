@@ -33,6 +33,7 @@ class AiController {
             activeScenarioId: ''
         };
         this.captureActive = false;
+        this.paused = false;
         this.starting = false;
         this.captureGeneration = 0;
         this.restartRequested = false;
@@ -75,6 +76,7 @@ class AiController {
             status: document.querySelector('#ai-status'),
             statusText: document.querySelector('#ai-status .ai-status-text'),
             sessionCost: document.querySelector('#ai-status .ai-session-cost'),
+            pauseButton: document.querySelector('#ai-pause'),
             scenarioSelect: document.querySelector('#ai-scenario-select'),
             scenarioName: document.querySelector('#ai-scenario-name'),
             scenarioPrompt: document.querySelector('#ai-scenario-prompt'),
@@ -97,6 +99,7 @@ class AiController {
         document.querySelector('#ai-scenario-save').addEventListener('click', () => this.saveScenario());
         document.querySelector('#ai-scenario-delete').addEventListener('click', () => this.deleteScenario());
         this.elements.inputDevice.addEventListener('change', () => this.changeInputDevice());
+        this.elements.pauseButton.addEventListener('click', () => this.togglePause());
         document.querySelector('#ai-key-save').addEventListener('click', () => this.saveApiKey());
         document.querySelector('#ai-key-delete').addEventListener('click', () => this.deleteApiKey());
         document.querySelector('#ai-feedback-undo').addEventListener('click', () => this.undoFeedback());
@@ -117,6 +120,7 @@ class AiController {
             this.refreshInputDevices(),
             this.refreshFeedbackStats()
         ]);
+        this.renderPauseButton();
     }
 
     handleDocumentClick(event) {
@@ -230,7 +234,12 @@ class AiController {
         this.flushFeedback();
         this.clearConversation();
         if (this.activeScenario()) {
-            await this.restartCapture();
+            if (this.paused) {
+                await this.stopCapture();
+                this.setStatus('paused');
+            } else {
+                await this.restartCapture();
+            }
         } else {
             await this.stopCapture();
             this.setStatus('error', 'Создайте и выберите сценарий пранка');
@@ -276,7 +285,7 @@ class AiController {
             inputDeviceId: this.elements.inputDevice.value
         });
 
-        if (this.mode === 'ai') {
+        if (this.mode === 'ai' && !this.paused) {
             await this.restartCapture();
         }
     }
@@ -299,7 +308,7 @@ class AiController {
         this.elements.settingsModal.classList.remove('is-active');
         this.notify('OpenAI API-ключ сохранён', false, 2000);
 
-        if (this.mode === 'ai') {
+        if (this.mode === 'ai' && !this.paused) {
             await this.restartCapture();
         }
     }
@@ -334,7 +343,12 @@ class AiController {
         await this.refreshSettings();
         await this.refreshInputDevices();
         if (generation === this.modeGeneration && this.mode === 'ai') {
-            await this.startCapture();
+            if (this.paused) {
+                this.setStatus('paused');
+            } else {
+                await this.startCapture();
+            }
+            this.renderPauseButton();
         }
     }
 
@@ -350,9 +364,38 @@ class AiController {
         this.elements.aiTab.classList.remove('is-active');
         this.elements.deckTab.classList.add('is-active');
         await this.stopCapture();
-        if (generation === this.modeGeneration && this.mode === 'deck') {
-            this.clearConversation();
+        return generation === this.modeGeneration && this.mode === 'deck';
+    }
+
+    async togglePause() {
+        if (this.mode !== 'ai') {
+            return;
         }
+
+        if (this.paused) {
+            this.paused = false;
+            this.renderPauseButton();
+            await this.startCapture();
+            return;
+        }
+
+        this.paused = true;
+        this.flushFeedback();
+        this.renderPauseButton();
+        await this.stopCapture();
+        this.setStatus('paused');
+    }
+
+    renderPauseButton() {
+        const button = this.elements && this.elements.pauseButton;
+        if (!button) {
+            return;
+        }
+
+        const label = this.paused ? 'Продолжить AI' : 'Поставить AI на паузу';
+        button.title = label;
+        button.setAttribute('aria-label', label);
+        button.querySelector('i').className = this.paused ? 'fa fa-play' : 'fa fa-pause';
     }
 
     async startCapture() {
@@ -362,7 +405,7 @@ class AiController {
             }
             return;
         }
-        if (this.captureActive || this.mode !== 'ai') {
+        if (this.captureActive || this.mode !== 'ai' || this.paused) {
             return;
         }
 
@@ -439,7 +482,6 @@ class AiController {
             }
 
             this.captureActive = true;
-            this.resetBilling();
             this.ipcRenderer.send('ai:start');
             this.indexCurrentPage();
         } catch (error) {
@@ -537,6 +579,7 @@ class AiController {
         const labels = {
             connecting: 'Подключение…',
             connected: 'AI слушает',
+            paused: 'AI на паузе',
             reconnecting: 'Переподключение…',
             stopped: 'AI выключен',
             error: 'Ошибка AI'
@@ -590,6 +633,10 @@ class AiController {
         }
 
         if (event.type === 'status') {
+            if (event.status === 'stopped' && this.mode === 'ai' && this.paused) {
+                this.setStatus('paused');
+                return;
+            }
             if (event.status === 'stopped' && this.mode === 'ai' && this.lastStatus === 'error') {
                 return;
             }
@@ -870,7 +917,7 @@ class AiController {
     isTurnVisible(turn) {
         const page = this.getPage();
         const scenario = this.activeScenario();
-        return this.mode === 'ai' && this.currentItemId === turn.itemId && page && scenario &&
+        return this.mode === 'ai' && !this.paused && this.currentItemId === turn.itemId && page && scenario &&
             page.pageHash === turn.pageHash && scenario.id === turn.scenarioId;
     }
 
@@ -1089,12 +1136,14 @@ class AiController {
             this.clearSuggestions('Переключаю персонажа…');
         }
 
-        await this.indexCurrentPage();
-        if (!this.captureActive && !this.starting) {
+        if (!this.paused) {
+            await this.indexCurrentPage();
+        }
+        if (!this.paused && !this.captureActive && !this.starting) {
             await this.startCapture();
         }
 
-        if (!characterChanged) {
+        if (this.paused || !characterChanged) {
             return;
         }
 
@@ -1153,6 +1202,7 @@ class AiController {
         this.pendingProvisional = null;
         this.pendingFinal = null;
         this.sessionId = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
+        this.resetBilling();
         this.renderTranscript('', false);
         this.clearSuggestions();
         this.setStatus('stopped');
