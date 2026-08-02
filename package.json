@@ -9,34 +9,31 @@
 	},
 	"scripts": {
 		"postinstall": "electron-builder install-app-deps",
-		"lint": "xo",
-		"test": "npm run lint",
+		"check": "node --check index.js && node --check custom.js && node --check config.js && node --check vendor/howler.js",
+		"lint": "eslint .",
+		"test": "npm run check && npm run lint",
 		"start": "electron .",
-		"pack": "electron-builder --dir",
-		"dist": "electron-builder --macos --linux",
-		"win": "electron-builder --x64 --windows",
-		"win32": "electron-builder --ia32 --windows",
-		"release": "np",
-		"sass": "node-sass index.scss index.css"
+		"pack": "electron-builder --dir --win --x64",
+		"dist": "electron-builder --win --x64",
+		"win": "electron-builder --win --x64",
+		"sass": "sass --no-source-map index.scss index.css"
+	},
+	"engines": {
+		"node": ">=22"
 	},
 	"dependencies": {
 		"@sindresorhus/slugify": "^0.9.1",
 		"bulma": "^0.7.5",
 		"bulma-extensions": "^6.2.7",
 		"bulmaswatch": "^0.7.2",
-		"electron-context-menu": "^0.12.1",
-		"electron-debug": "^3.0.0",
-		"electron-store": "^3.3.0",
-		"electron-unhandled": "^2.2.0",
-		"electron-util": "^0.12.0",
+		"electron-store": "7.0.3",
 		"fancy-textfill": "^1.2.5",
-		"farmhash": "^3.0.0",
+		"farmhashjs": "1.0.1",
 		"fast-glob": "^3.0.2",
 		"filenamify": "^4.1.0",
 		"fork-awesome": "^1.1.7",
 		"fuse.js": "^3.4.6",
 		"hotkeys-js": "^3.6.11",
-		"howler": "^2.1.2",
 		"iconv-lite": "^0.5.0",
 		"jquery": "^3.4.1",
 		"jquery-jeditable": "^2.0.10",
@@ -46,56 +43,26 @@
 		"moment": "^2.24.0",
 		"shepherd.js": "^5.0.0",
 		"simplebar": "^4.1.0",
-		"tippy.js": "^4.3.4",
-		"v8-compile-cache": "^2.1.0"
+		"tippy.js": "^4.3.4"
 	},
 	"devDependencies": {
-		"electron": "^5.0.4",
-		"electron-builder": "^20.43.0",
-		"eslint": "^5.16.0",
-		"eslint-config-xo": "^0.26.0",
-		"eslint-plugin-ava": "^7.1.0",
-		"eslint-plugin-import": "^2.17.3",
-		"eslint-plugin-no-use-extend-native": "^0.4.0",
-		"eslint-plugin-promise": "^4.1.1",
-		"eslint-plugin-unicorn": "^9.1.0",
-		"node-sass": "^4.12.0",
-		"np": "^5.0.3",
-		"react": "^16.9.0",
-		"react-dom": "^16.9.0",
-		"xo": "^0.24.0"
-	},
-	"xo": {
-		"envs": [
-			"node",
-			"browser"
-		],
-		"space": 4,
-		"esnext ": false,
-		"rules": {
-			"prefer-arrow-callback": 0,
-			"unicorn/prevent-abbreviations": 0,
-			"prefer-destructuring": 0,
-			"object-shorthand": 0
-		}
-	},
-	"np": {
-		"publish": false,
-		"releaseDraft": false
+		"electron": "43.2.0",
+		"electron-builder": "26.15.3",
+		"eslint": "10.7.0",
+		"sass": "^1.102.0"
 	},
 	"build": {
 		"appId": "com.Nik.GrinchPlayer",
 		"extraResources": "sounds/*.ogg",
 		"win": {
-			"target": "portable"
-		},
-		"mac": {
-			"target": "zip",
-			"category": "public.app-category.utilities"
-		},
-		"linux": {
-			"target": "AppImage",
-			"category": "Utility"
+			"target": [{
+				"target": "portable",
+				"arch": [
+					"x64"
+				]
+			}],
+			"icon": "build/icon.png",
+			"artifactName": "${productName}-${version}-win-${arch}.${ext}"
 		}
 	}
 }

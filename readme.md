@@ -5,21 +5,11 @@
 [![Видеогайд по плееру](https://img.youtube.com/vi/Tqy9zhD82Ik/maxresdefault.jpg)](https://www.youtube.com/watch?v=Tqy9zhD82Ik)
 ## Install
 
-*macOS 10.10+, Linux and Windows 7+ are supported (64-bit only).*
+*Основная целевая платформа: Windows 10/11 (64-bit). Разработка возможна на macOS.*
 
 **Windows**
 
 [**Download**](https://github.com/n3tman/GrinchPlayer/releases/latest) the `.exe` file.
-
-**macOS**
-
-[**Download**](https://github.com/n3tman/GrinchPlayer/releases/latest) the `-mac.zip` file.
-
-**Linux**
-
-[**Download**](https://github.com/n3tman/GrinchPlayer/releases/latest) the `.AppImage` file.
-
-*The AppImage needs to be [made executable](http://discourse.appimage.org/t/how-to-make-an-appimage-executable/80) after download.*
 
 ---
 
@@ -27,17 +17,19 @@
 
 Built with [Electron](https://electronjs.org).
 
+Requires Node.js 22 or newer.
+
 ### Run
 
 ```
-$ npm install
+$ npm ci
 $ npm start
 ```
 
-### Publish
+### Build for Windows 10/11
 
 ```
-$ npm run release
+$ npm run win
 ```
 
-After Travis finishes building your app, open the release draft it created and click "Publish".
+The portable x64 `.exe` is created in `dist/`. GitHub Actions runs the same build on Windows for every push and pull request.

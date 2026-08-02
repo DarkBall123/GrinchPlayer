@@ -1,26 +1,84 @@
 'use strict';
+const fs = require('fs');
 const path = require('path');
-const {app, BrowserWindow} = require('electron');
-// eslint-disable-next-line no-unused-vars
-const cache = require('v8-compile-cache');
-const {is} = require('electron-util');
-const unhandled = require('electron-unhandled');
-const debug = require('electron-debug');
-const config = require('./config');
-
-unhandled();
-debug();
+const {app, BrowserWindow, dialog, ipcMain, screen} = require('electron');
 
 // Note: Must match `build.appId` in package.json
 app.setAppUserModelId('com.Nik.GrinchPlayer');
 app.disableHardwareAcceleration();
 
-// Set userData to current folder (portable app)
-app.setPath('userData', process.env.PORTABLE_EXECUTABLE_DIR + '/' + app.getName());
+// Keep settings next to the portable executable on Windows. Development builds
+// and non-portable packages use Electron's platform default userData directory.
+if (process.platform === 'win32' && process.env.PORTABLE_EXECUTABLE_DIR) {
+    const userDataPath = path.join(process.env.PORTABLE_EXECUTABLE_DIR, app.getName());
+    try {
+        fs.mkdirSync(userDataPath, {recursive: true});
+        fs.accessSync(userDataPath, fs.constants.W_OK);
+        app.setPath('userData', userDataPath);
+    } catch (error) {
+        console.warn('Portable settings directory is not writable; using the Windows default.', error);
+    }
+}
+
+const Store = require('electron-store');
+Store.initRenderer();
+const config = require('./config');
 
 // Prevent variables from being garbage collected
 let mainWindow;
 const bounds = config.get('bounds') || {};
+
+function getWindow(event) {
+    return BrowserWindow.fromWebContents(event.sender);
+}
+
+ipcMain.handle('dialog:open', function (event, options) {
+    return dialog.showOpenDialog(getWindow(event), options);
+});
+
+ipcMain.handle('dialog:save', function (event, options) {
+    return dialog.showSaveDialog(getWindow(event), options);
+});
+
+ipcMain.on('dialog:message-sync', function (event, options) {
+    event.returnValue = dialog.showMessageBoxSync(getWindow(event), options);
+});
+
+ipcMain.on('app:get-path', function (event, name) {
+    event.returnValue = name === 'app' ? app.getAppPath() : app.getPath(name);
+});
+
+ipcMain.on('window:minimize', function (event) {
+    getWindow(event).minimize();
+});
+
+ipcMain.on('window:toggle-maximize', function (event) {
+    const win = getWindow(event);
+    if (win.isMaximized()) {
+        win.unmaximize();
+    } else {
+        win.maximize();
+    }
+});
+
+ipcMain.on('window:close', function (event) {
+    getWindow(event).close();
+});
+
+function boundsAreVisible(savedBounds) {
+    if (!Number.isFinite(savedBounds.x) || !Number.isFinite(savedBounds.y) ||
+        !Number.isFinite(savedBounds.width) || !Number.isFinite(savedBounds.height)) {
+        return false;
+    }
+
+    return screen.getAllDisplays().some(function (display) {
+        const area = display.workArea;
+        return savedBounds.x < area.x + area.width &&
+            savedBounds.x + savedBounds.width > area.x &&
+            savedBounds.y < area.y + area.height &&
+            savedBounds.y + savedBounds.height > area.y;
+    });
+}
 
 const createMainWindow = async () => {
     const appName = app.getName() + ' v' + app.getVersion();
@@ -34,11 +92,14 @@ const createMainWindow = async () => {
         width: 1280,
         height: 768,
         webPreferences: {
-            nodeIntegration: true
+            nodeIntegration: true,
+            contextIsolation: false
         }
     });
 
-    win.setBounds(bounds);
+    if (boundsAreVisible(bounds)) {
+        win.setBounds(bounds);
+    }
 
     win.on('ready-to-show', () => {
         win.show();
@@ -60,14 +121,14 @@ const createMainWindow = async () => {
 };
 
 app.on('window-all-closed', () => {
-    if (!is.macos) {
+    if (process.platform !== 'darwin') {
         app.quit();
     }
 });
 
-app.on('activate', () => {
+app.on('activate', async () => {
     if (!mainWindow) {
-        mainWindow = createMainWindow();
+        mainWindow = await createMainWindow();
     }
 });
 

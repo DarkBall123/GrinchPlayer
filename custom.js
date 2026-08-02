@@ -2,11 +2,9 @@
 
 'use strict';
 
-const {webFrame, remote, shell} = require('electron');
-const {dialog} = require('electron').remote;
+const {ipcRenderer, shell, webFrame, webUtils} = require('electron');
 const path = require('path');
 const fs = require('fs');
-const farmhash = require('farmhash');
 const filenamify = require('filenamify');
 const hotkeys = require('hotkeys-js');
 const iconvlite = require('iconv-lite');
@@ -22,6 +20,21 @@ const moment = require('moment');
 
 const hp = require('./vendor/howler');
 const config = require('./config');
+
+const dialog = {
+    showOpenDialog: function (options, callback) {
+        return ipcRenderer.invoke('dialog:open', options).then(function (result) {
+            callback(result.canceled ? undefined : result.filePaths);
+        });
+    },
+    showSaveDialog: function (options, callback) {
+        return ipcRenderer.invoke('dialog:save', options).then(function (result) {
+            callback(result.canceled ? undefined : result.filePath);
+        });
+    }
+};
+const userDataPath = ipcRenderer.sendSync('app:get-path', 'userData');
+const applicationPath = ipcRenderer.sendSync('app:get-path', 'app');
 
 const keyboardArray = ['q', 'w', 'e', 'r', 't', 'y', 'u', 'a', 's', 'd', 'f', 'g', 'h', 'j', 'z', 'x', 'c', 'v', 'b', 'n', 'm'];
 const russianArray = ['й', 'ц', 'у', 'к', 'е', 'н', 'г', 'ф', 'ы', 'в', 'а', 'п', 'р', 'о', 'я', 'ч', 'с', 'м', 'и', 'т', 'ь'];
@@ -43,7 +56,7 @@ let activePages = {};
 let currentTab = config.get('currentTab') || '';
 let currentProject = config.get('currentProject') || '';
 let deviceId = config.get('device') || 'default';
-let volume = config.get('volume') || 1;
+let volume = config.has('volume') ? config.get('volume') : 1;
 let $wrapper;
 let $main;
 let $deckItems;
@@ -58,6 +71,7 @@ let $quickSearch;
 let fuseSearch;
 let infoTipsActive = false;
 let infoGradientActive = false;
+let farmhash;
 
 let trainDb = {};
 let customTrain = {};
@@ -101,7 +115,7 @@ function showNotification(text, error, time) {
 
 // Confirm action
 function confirmAction(text, buttons) {
-    return dialog.showMessageBox({
+    return ipcRenderer.sendSync('dialog:message-sync', {
         buttons: buttons ? buttons : ['Нет', 'Да'],
         message: text,
         cancelId: 10
@@ -601,7 +615,7 @@ function saveAllData(skipNotify) {
 function showFolderSelectionDialog(callback, finish, title) {
     let files = [];
 
-    dialog.showOpenDialog({
+    return dialog.showOpenDialog({
         title: title ? title : 'Выбери папки со звуками',
         properties: ['openDirectory', 'multiSelections']
     }, function (dirs) {
@@ -645,8 +659,16 @@ function initBlockStats(page, hash) {
     }
 }
 
+// Fill fields omitted by old exports and empty pages.
+function normalizePage(page) {
+    page.added = Array.isArray(page.added) ? page.added : [];
+    page.blocks = page.blocks && typeof page.blocks === 'object' ? page.blocks : {};
+    return page;
+}
+
 // Add page to database
 function addPageToDatabase(page) {
+    normalizePage(page);
     if (!savedPageExists(page.hash)) {
         addPageToList(page.hash, page.name, true);
         allPages[page.hash] = page;
@@ -656,6 +678,7 @@ function addPageToDatabase(page) {
 
 // Load saved page
 function loadSavedPage(page, skipTab) {
+    normalizePage(page);
     const pageHash = page.hash;
 
     activePages[pageHash] = {
@@ -709,7 +732,7 @@ function loadPpv2(filePath) {
     const pageHash = getStringHash(pageName);
 
     if (pageExists(pageHash)) {
-        return false;
+        return {duplicate: true, name: pageName};
     }
 
     const lines = file.split(/\r?\n/);
@@ -726,6 +749,11 @@ function loadPpv2(filePath) {
     lines.forEach(function (line, i) {
         if (i !== 0 && line.trim().length > 0) {
             const parts = line.split('*');
+            if (parts.length < 6) {
+                lineNum++;
+                return;
+            }
+
             const filePath = path.join(parsed.dir, parts[0]);
             lineNum++;
 
@@ -764,9 +792,15 @@ function loadPpv2(filePath) {
         }
     });
 
-    if (counter > 0) {
-        addPageToDatabase(page);
+    if (counter === 0) {
+        return {
+            added: 0,
+            skipped: lineNum,
+            name: pageName
+        };
     }
+
+    addPageToDatabase(page);
 
     return {
         added: counter,
@@ -983,7 +1017,7 @@ function addPageToList(hash, text, reindex) {
 // Load project tabs by hash
 function loadProjectTabs(hash) {
     allProjects[hash].pages.forEach(function (page) {
-        if (!activePageExists(page)) {
+        if (allPages[page] && !activePageExists(page)) {
             loadSavedPage(allPages[page]);
         }
     });
@@ -1370,11 +1404,17 @@ function applySelectedBlockColor() {
 }
 
 // Import a saved page
-function importSavedPage(file, json) {
+async function importSavedPage(file, json) {
+    normalizePage(json);
     let counter = 0;
     const filesNum = _.size(json.blocks);
     const dir = path.dirname(file);
     const checkPath = path.join(dir, json.name);
+
+    if (filesNum === 0) {
+        addPageToDatabase(_.omit(json, ['type']));
+        return {added: 0, skipped: 0};
+    }
 
     if (fs.existsSync(checkPath)) {
         const files = getAudioFilesInFolder(checkPath);
@@ -1382,11 +1422,15 @@ function importSavedPage(file, json) {
             counter = processJsonFiles(files, json);
         }
     } else {
-        showFolderSelectionDialog(function (files) {
+        let canceled = true;
+        await showFolderSelectionDialog(function (files) {
+            canceled = false;
             counter = processJsonFiles(files, json);
-        }, function () {
-            showNotification('Добавлена страница <b>' + json.name + '</b>. Звуков: <b>' + counter + '</b>, пропущено: <b>' + (filesNum - counter) + '</b>');
-        }, 'Выбери папку со звуками для страницы "' + json.name + '"');
+        }, function () {}, 'Выбери папку со звуками для страницы "' + json.name + '"');
+
+        if (canceled) {
+            return {added: 0, skipped: filesNum, canceled: true};
+        }
     }
 
     return {
@@ -1397,16 +1441,15 @@ function importSavedPage(file, json) {
 
 // Export single page from database
 function exportSavedPage(page, filePath) {
+    normalizePage(page);
     const json = {
         type: 'page',
         hash: getStringHash(page.name),
-        name: page.name
+        name: page.name,
+        added: page.added,
+        blocks: {}
     };
     const blocks = {};
-
-    if (page.added.length > 0) {
-        json.added = page.added;
-    }
 
     if (_.size(page.blocks) > 0) {
         _.each(page.blocks, function (block, hash) {
@@ -2099,12 +2142,12 @@ function roundToTen(value) {
 // Get hex hash of a file
 function getFileHash(path) {
     const file = fs.readFileSync(path);
-    return Number(farmhash.hash32(file)).toString(16);
+    return Number(farmhash.legacyHash32_x86(file)).toString(16);
 }
 
 // Get hex hash of a string
 function getStringHash(text) {
-    return Number(farmhash.hash32(text)).toString(16);
+    return Number(farmhash.legacyHash32_x86(text)).toString(16);
 }
 
 // Get files in folder by mask
@@ -2132,6 +2175,7 @@ function getPageName(text) {
 
 // Remove blocks without path from json
 function filterBlocksWithoutPath(json) {
+    normalizePage(json);
     _.keys(json.blocks).forEach(function (hash) {
         const block = json.blocks[hash];
         if (!_.keys(block).includes('path')) {
@@ -2152,7 +2196,7 @@ function getTopOffset() {
 
 // Get height of all the bottom blocks
 function getLeftOffset() {
-    return 250;
+    return document.querySelector('.wrapper').getBoundingClientRect().left;
 }
 
 // Update height of the main block
@@ -2297,7 +2341,7 @@ function removeBrushState() {
 // Erase 'pages' folder with cached pages
 function flushSavedPages() {
     const savedFiles = fg.sync('*.json', {
-        cwd: path.join(remote.app.getPath('userData'), 'pages'),
+        cwd: path.join(userDataPath, 'pages'),
         onlyFiles: true,
         absolute: true
     });
@@ -2489,8 +2533,8 @@ window.addEventListener('beforeunload', function () {
 //                                   //
 // ================================= //
 
-$(function () {
-    const mainWindow = remote.getCurrentWindow();
+$(async function () {
+    farmhash = await import('./node_modules/farmhashjs/dist/index.js');
     const $body = $('body');
     $quickSearch = $('#quick-search');
     $tabList = $('#tabs > ul');
@@ -2503,19 +2547,15 @@ $(function () {
 
     // Window controls
     $('#win-minimize').click(function () {
-        mainWindow.minimize();
+        ipcRenderer.send('window:minimize');
     });
 
     $('#win-maximize').click(function () {
-        if (mainWindow.isMaximized()) {
-            mainWindow.unmaximize();
-        } else {
-            mainWindow.maximize();
-        }
+        ipcRenderer.send('window:toggle-maximize');
     });
 
     $('#win-close').click(function () {
-        mainWindow.close();
+        ipcRenderer.send('window:close');
     });
 
     // Set default global volume
@@ -2724,7 +2764,9 @@ $(function () {
     const tabs = config.get('activeTabs');
     if (tabs.length > 0) {
         tabs.forEach(function (hash) {
-            loadSavedPage(allPages[hash]);
+            if (allPages[hash]) {
+                loadSavedPage(allPages[hash]);
+            }
         });
     }
 
@@ -2733,7 +2775,7 @@ $(function () {
 
     // Click current tab if it's saved in the config + zoom
     setTimeout(function () {
-        if (currentTab.length > 0) {
+        if (activePages[currentTab]) {
             tabClick(currentTab);
         } else {
             tabClick(true);
@@ -2856,31 +2898,46 @@ $(function () {
                 name: 'JSON',
                 extensions: ['json']
             }]
-        }, function (files) {
+        }, async function (files) {
             if (files === undefined) {
                 $wrapper.removeClass('is-loading');
             } else {
                 let addedCount = 0;
                 let skippedCount = 0;
                 let pageCount = 0;
+                let invalidCount = 0;
 
-                files.forEach(function (file) {
-                    const json = JSON.parse(fs.readFileSync(file));
+                for (const file of files) {
+                    let json;
+                    try {
+                        json = JSON.parse(fs.readFileSync(file, 'utf8'));
+                    } catch (error) {
+                        console.error('Не удалось импортировать ' + file, error);
+                        invalidCount++;
+                        continue;
+                    }
 
-                    if (json.type && json.type === 'page' && !pageExists(json.hash)) {
-                        const result = importSavedPage(file, json);
+                    if (json && typeof json === 'object' && json.type === 'page' &&
+                        typeof json.hash === 'string' &&
+                        typeof json.name === 'string' && !pageExists(json.hash)) {
+                        const result = await importSavedPage(file, json);
+                        if (result.canceled || !savedPageExists(json.hash)) {
+                            continue;
+                        }
+
                         addedCount += result.added;
                         skippedCount += result.skipped;
                         pageCount++;
+                    } else {
+                        invalidCount++;
                     }
-                });
-
-                if (pageCount > 0 && addedCount > 0) {
-                    showNotification('Добавлено страниц: <b>' + pageCount + '</b>. Звуков: <b>' + addedCount + '</b>, пропущено: <b>' + skippedCount + '</b>', false, 5000);
                 }
 
-                if (pageCount === 0) {
-                    showNotification('Новых страниц <b>не найдено</b>', true, 3000);
+                if (pageCount > 0) {
+                    showNotification('Добавлено страниц: <b>' + pageCount + '</b>. Звуков: <b>' + addedCount +
+                        '</b>, пропущено: <b>' + skippedCount + '</b>, некорректных файлов: <b>' + invalidCount + '</b>', false, 5000);
+                } else {
+                    showNotification('Новых страниц <b>не найдено</b>. Некорректных файлов: <b>' + invalidCount + '</b>', true, 3000);
                 }
 
                 $wrapper.removeClass('is-loading');
@@ -2926,12 +2983,15 @@ $(function () {
                 $wrapper.removeClass('is-loading');
             } else {
                 const result = loadPpv2(files[0]);
-                if (result) {
+                if (result.duplicate) {
+                    $wrapper.removeClass('is-loading');
+                    showNotification('Такая страница уже есть!', true, 1500);
+                } else if (result.added > 0) {
                     $wrapper.removeClass('is-loading');
                     showNotification('Добавлена страница <b>' + result.name + '</b>. Звуков: <b>' + result.added + '</b>, пропущено: <b>' + result.skipped + '</b>');
                 } else {
                     $wrapper.removeClass('is-loading');
-                    showNotification('Такая страница уже есть!', true, 1500);
+                    showNotification('В файле не найдено доступных звуков', true, 2000);
                 }
             }
         });
@@ -2962,7 +3022,7 @@ $(function () {
 
                     files.forEach(function (file) {
                         const result = loadPpv2(file);
-                        if (result) {
+                        if (!result.duplicate && result.added > 0) {
                             pageCount++;
                             addedCount += result.added;
                             skippedCount += result.skipped;
@@ -3163,7 +3223,7 @@ $(function () {
         if (isEditMode) {
             const $parent = $(this).parent();
             const hash = $parent.attr('data-page');
-            const cachePath = path.join(remote.app.getPath('userData'), 'pages', hash + '.json');
+            const cachePath = path.join(userDataPath, 'pages', hash + '.json');
 
             if (confirmAction('Удалить страницу ' + allPages[hash].name.toUpperCase() + ' из базы?') === 1) {
                 actionWithLoading(function () {
@@ -3304,13 +3364,17 @@ $(function () {
             let fileArray = [];
 
             for (const file of files) {
-                if (!file.type && file.size % 4096 === 0 &&
-                    fs.lstatSync(file.path).isDirectory()) {
-                    fileArray = fileArray.concat(getAudioFilesInFolder(file.path));
+                const filePath = webUtils.getPathForFile(file);
+                if (!filePath) {
+                    continue;
+                }
+
+                if (fs.lstatSync(filePath).isDirectory()) {
+                    fileArray = fileArray.concat(getAudioFilesInFolder(filePath));
                 } else {
-                    const ext = file.name.split('.').pop().toLowerCase();
+                    const ext = path.extname(filePath).slice(1).toLowerCase();
                     if (audioExtensions.includes(ext)) {
-                        fileArray.push(file.path);
+                        fileArray.push(filePath);
                     }
                 }
             }
@@ -3365,7 +3429,8 @@ $(function () {
     // -------------------- //
 
     $('#update-base').click(function () {
-        if (_.keys(allPages)[0].length < 12) {
+        const firstPageHash = _.keys(allPages)[0];
+        if (!firstPageHash || firstPageHash.length < 12) {
             showNotification('Исправление не требуется!', false, 3000);
         } else {
             actionWithLoading(function () {
@@ -3732,7 +3797,7 @@ $(function () {
     }
 
     if (!fs.existsSync(howlSoundPath)) {
-        howlSoundPath = path.join(remote.app.getAppPath(), 'sounds');
+        howlSoundPath = path.join(applicationPath, 'sounds');
     }
 
     const sounds = getAudioFilesInFolder(howlSoundPath);
