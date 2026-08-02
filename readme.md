@@ -5,21 +5,13 @@
 [![Видеогайд по плееру](https://img.youtube.com/vi/Tqy9zhD82Ik/maxresdefault.jpg)](https://www.youtube.com/watch?v=Tqy9zhD82Ik)
 ## Install
 
-*macOS 10.10+, Linux and Windows 7+ are supported (64-bit only).*
+*Основная целевая платформа: Windows 10/11 (64-bit). Разработка возможна на macOS.*
 
 **Windows**
 
-[**Download**](https://github.com/n3tman/GrinchPlayer/releases/latest) the `.exe` file.
-
-**macOS**
-
-[**Download**](https://github.com/n3tman/GrinchPlayer/releases/latest) the `-mac.zip` file.
-
-**Linux**
-
-[**Download**](https://github.com/n3tman/GrinchPlayer/releases/latest) the `.AppImage` file.
-
-*The AppImage needs to be [made executable](http://discourse.appimage.org/t/how-to-make-an-appimage-executable/80) after download.*
+Готовый portable `.exe` публикуется как артефакт
+[GrinchPlayer-windows-x64](https://github.com/DarkBall123/GrinchPlayer/actions/workflows/windows.yml).
+Откройте последний зелёный запуск Windows и скачайте артефакт внизу страницы Summary.
 
 ---
 
@@ -27,17 +19,33 @@
 
 Built with [Electron](https://electronjs.org).
 
+Requires Node.js 22 or newer.
+
 ### Run
 
 ```
-$ npm install
+$ npm ci
 $ npm start
 ```
 
-### Publish
+### Build for Windows 10/11
 
 ```
-$ npm run release
+$ npm run win
 ```
 
-After Travis finishes building your app, open the release draft it created and click "Publish".
+The portable x64 `.exe` is created in `dist/`. GitHub Actions runs the same build on Windows for every push and pull request.
+
+## AI-подсказчик
+
+AI-режим расшифровывает отдельный аудиовход и предлагает пять готовых звуков только с открытой страницы. Каждая страница считается отдельным персонажем: при переключении персонажа общий контекст звонка сохраняется, но shortlist немедленно пересчитывается только по звукам новой страницы. Для Windows настройте VB-Cable или Voicemeeter так, чтобы речь собеседника приходила в отдельный recording endpoint, а звуки GrinchPlayer уходили через другой `audiooutput`.
+
+1. Откройте вкладку **AI** и в настройках добавьте OpenAI API-ключ. Переменная `OPENAI_API_KEY` имеет приоритет над сохранённым ключом.
+2. Создайте сценарий пранка. Удобная карта: `Легенда`, `Цель`, `Факты`, `Этапы`, `Триггеры`, `Нельзя`, `Колбэки`. Можно хранить несколько сценариев.
+3. Выберите виртуальный endpoint в поле **AI input**. Приложение не переключается на системный микрофон, если этот вход пропал.
+4. Клавиши `1–5` или кнопки запускают предложенные звуки. Модель не генерирует новые фразы: строгий ответ содержит только идентификаторы существующих блоков.
+5. Контекст звонка общий для всех персонажей: шесть последних обменов передаются точно, ещё до трёх старых выбираются по смыслу. Кандидаты всегда берутся только с текущей страницы.
+6. Вкладка **Deck** оставляет AI слушать в фоне, поэтому ручной пульт работает одновременно с подсказчиком, а ручные клики сохраняются как примеры. Кнопка паузы останавливает захват и платную API-сессию; **Новый звонок** очищает только контекст разговора.
+7. Undo отменяет обучение на последней реплике, очистка удаляет все локальные примеры и наблюдения. Экспорт страниц их не затрагивает.
+
+Если Windows блокирует вход, включите **Allow desktop apps to access your microphone** в настройках приватности микрофона.

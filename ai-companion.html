@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="ru">
+<head>
+    <meta charset="utf-8">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: 'unsafe-inline'">
+    <title>GrinchPlayer — AI-подсказки</title>
+    <link rel="stylesheet" href="index.css">
+    <link rel="stylesheet" href="ai-companion.css">
+    <script defer src="ai-companion.js"></script>
+</head>
+<body>
+<main class="ai-companion">
+    <header class="ai-companion-header">
+        <div>
+            <div class="ai-companion-title">AI-подсказки</div>
+            <div class="ai-companion-character" id="ai-companion-character">Текущий персонаж</div>
+        </div>
+        <div class="ai-companion-status" id="ai-companion-status" data-status="stopped">
+            <span class="ai-companion-status-dot"></span>
+            <span id="ai-companion-status-text">AI выключен</span>
+        </div>
+    </header>
+
+    <section class="ai-companion-transcript">
+        <div class="ai-section-title">
+            <span>Собеседник</span>
+            <span id="ai-companion-cost"></span>
+        </div>
+        <div class="ai-transcript-text" id="ai-companion-transcript">Ожидаю речь…</div>
+        <div class="ai-call-state" id="ai-companion-call-state">Этап: вход</div>
+    </section>
+
+    <section class="ai-companion-suggestions">
+        <div class="ai-section-title">
+            <span>Ответы</span>
+            <span class="ai-suggestion-stage" id="ai-companion-stage"></span>
+        </div>
+        <div class="ai-suggestion-list" id="ai-companion-list">
+            <div class="ai-empty">Подсказки появятся во время речи</div>
+        </div>
+    </section>
+
+    <footer class="ai-companion-footer">Клик или клавиши 1–5 · звук запускается в основном окне</footer>
+</main>
+</body>
+</html>

@@ -83,6 +83,11 @@
             <button class="button no-drag" id="win-maximize"><i class="fa fa-window-maximize"></i></button>
             <button class="button no-drag" id="win-close"><i class="fa fa-window-close"></i></button>
         </div>
+        <p class="panel-tabs ai-mode-tabs no-drag">
+            <a class="is-active" id="deck-mode-tab">Колода</a>
+            <a id="ai-mode-tab"><i class="fa fa-bolt"></i> AI</a>
+            <a id="ai-popout" title="Открыть AI-подсказки в отдельном окне"><i class="fa fa-window-restore"></i> Окно</a>
+        </p>
         <p class="panel-heading phrases">
             Осталось фраз: <span class="count">0</span>
         </p>
@@ -185,6 +190,69 @@
                 <button class="button" id="batch-export" title="Экспортировать все страницы"><i class="fa fa-upload"></i> Экспорт всех страниц</button>
             </div>
         </div>
+        <div class="ai-panel" id="ai-panel">
+            <div class="ai-status" id="ai-status" data-status="stopped">
+                <span class="ai-status-dot"></span>
+                <span class="ai-status-text">AI выключен</span>
+                <span class="ai-session-cost"></span>
+                <button class="button is-small" id="ai-new-call" title="Новый звонок: очистить контекст" aria-label="Новый звонок"><i class="fa fa-refresh"></i></button>
+                <button class="button is-small" id="ai-pause" title="Поставить AI на паузу" aria-label="Поставить AI на паузу"><i class="fa fa-pause"></i></button>
+                <button class="button is-small open-ai-settings" title="Настройки OpenAI"><i class="fa fa-gear"></i></button>
+            </div>
+            <details class="ai-scenario" open>
+                <summary>
+                    <span>Сценарий</span>
+                    <span id="ai-scenario-label">не выбран</span>
+                </summary>
+                <div class="ai-scenario-body">
+                    <div class="ai-scenario-picker">
+                        <select id="ai-scenario-select">
+                            <option value="">Создайте сценарий</option>
+                        </select>
+                        <button class="button is-small" id="ai-scenario-new" title="Новый сценарий"><i class="fa fa-plus"></i></button>
+                        <button class="button is-small" id="ai-scenario-template" title="Вставить карту звонка"><i class="fa fa-list-alt"></i></button>
+                        <button class="button is-small" id="ai-scenario-save" title="Сохранить сценарий"><i class="fa fa-floppy-o"></i></button>
+                        <button class="button is-small" id="ai-scenario-delete" title="Удалить сценарий"><i class="fa fa-trash"></i></button>
+                    </div>
+                    <input class="input" id="ai-scenario-name" maxlength="80" placeholder="Название сценария">
+                    <textarea class="textarea" id="ai-scenario-prompt" maxlength="12000" rows="4"
+                              placeholder="Легенда, цель, факты, этапы, триггеры, запреты и колбэки"></textarea>
+                </div>
+            </details>
+            <div class="ai-device">
+                <label for="ai-input-device">Вход собеседника</label>
+                <select class="select" id="ai-input-device">
+                    <option value="">Выберите аудиовход</option>
+                </select>
+                <div class="ai-level" title="Уровень входного сигнала"><span id="ai-level-bar"></span></div>
+                <p class="ai-hint">Выберите recording endpoint VB-Cable или Voicemeeter, куда приходит только собеседник.</p>
+            </div>
+            <div class="ai-transcript">
+                <div class="ai-section-title">Собеседник</div>
+                <div class="ai-transcript-text" id="ai-transcript-text">Ожидаю речь…</div>
+                <div class="ai-call-state" id="ai-call-state">Этап: вход</div>
+            </div>
+            <div class="ai-suggestions">
+                <div class="ai-section-title">
+                    Ответы текущего персонажа
+                    <span class="ai-suggestion-stage" id="ai-suggestion-stage"></span>
+                </div>
+                <div id="ai-suggestion-list" class="ai-suggestion-list">
+                    <div class="ai-empty">Подсказки появятся во время речи</div>
+                </div>
+            </div>
+            <div class="ai-feedback-controls">
+                <span id="ai-feedback-count">Примеров: 0</span>
+                <div class="buttons">
+                    <button class="button is-small" id="ai-feedback-undo" title="Отменить обучение на последней реплике">
+                        <i class="fa fa-undo"></i>
+                    </button>
+                    <button class="button is-small" id="ai-feedback-clear" title="Очистить все примеры">
+                        <i class="fa fa-trash"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
     </nav>
 </div>
 
@@ -197,6 +265,33 @@
         </header>
         <section class="modal-card-body">
             <div class="list is-hoverable"></div>
+        </section>
+    </div>
+</div>
+
+<div class="modal no-drag" id="ai-settings">
+    <div class="modal-background"></div>
+    <div class="modal-card ai-settings-card">
+        <header class="modal-card-head">
+            <p class="modal-card-title">OpenAI API</p>
+            <button class="delete" aria-label="close"></button>
+        </header>
+        <section class="modal-card-body">
+            <div class="field">
+                <label class="label" for="ai-api-key">API-ключ</label>
+                <div class="control">
+                    <input class="input" id="ai-api-key" type="password" autocomplete="off" placeholder="Вставьте новый ключ">
+                </div>
+                <p class="help" id="ai-key-status">Ключ не настроен</p>
+            </div>
+            <div class="buttons">
+                <button class="button is-link" id="ai-key-save">Сохранить</button>
+                <button class="button is-danger is-outlined" id="ai-key-delete">Удалить локальный ключ</button>
+            </div>
+            <div class="content ai-routing-help">
+                <p><b>Windows 10:</b> разрешите desktop-приложениям доступ к микрофону. Звук собеседника направьте в отдельный виртуальный recording endpoint.</p>
+                <p>Звук GrinchPlayer должен идти через другое устройство и не попадать на выбранный AI-вход.</p>
+            </div>
         </section>
     </div>
 </div>
