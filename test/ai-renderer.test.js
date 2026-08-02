@@ -23,6 +23,7 @@ test('switching character keeps conversation history and reranks the current utt
     };
     const controller = createController({getPage: function () { return page; }});
     controller.mode = 'ai';
+    controller.aiEnabled = true;
     controller.captureActive = true;
     controller.settings.scenarios = [{id: 'scenario', name: 'Сценарий', prompt: 'План'}];
     controller.settings.activeScenarioId = 'scenario';
@@ -107,13 +108,14 @@ test('feedback from one utterance is grouped by character page', async function 
     assert.equal(payloads.every(function (item) { return item.payload.rootTurnId === 'turn'; }), true);
 });
 
-test('transcript delta starts a turn without server VAD events', function () {
+test('transcript delta keeps updating while deck is visible', function () {
     const controller = createController({
         getPage: function () {
             return {pageHash: 'character', pageName: 'Персонаж', candidates: []};
         }
     });
-    controller.mode = 'ai';
+    controller.mode = 'deck';
+    controller.aiEnabled = true;
     controller.settings.scenarios = [{id: 'scenario', name: 'Сценарий', prompt: 'План'}];
     controller.settings.activeScenarioId = 'scenario';
     controller.clearSuggestions = function () {};
@@ -144,6 +146,7 @@ test('pause stops capture and resumes without clearing conversation', async func
         }
     };
     controller.mode = 'ai';
+    controller.aiEnabled = true;
     controller.turns.set('turn', {itemId: 'turn'});
     controller.turnOrder = ['turn'];
     controller.currentItemId = 'turn';
@@ -167,10 +170,11 @@ test('pause stops capture and resumes without clearing conversation', async func
     assert.equal(controller.turns.has('turn'), true);
 });
 
-test('switching to deck stops capture without clearing conversation', async function () {
+test('switching to deck keeps AI capture and conversation running', async function () {
     const classList = {add: function () {}, remove: function () {}};
     const controller = createController();
     controller.mode = 'ai';
+    controller.aiEnabled = true;
     controller.elements = {
         deck: {classList: classList},
         aiTab: {classList: classList},
@@ -180,11 +184,43 @@ test('switching to deck stops capture without clearing conversation', async func
     controller.turnOrder = ['turn'];
     controller.currentItemId = 'turn';
     controller.flushFeedback = function () {};
-    controller.stopCapture = async function () {};
+    let stopped = 0;
+    controller.stopCapture = async function () { stopped += 1; };
 
     await controller.showDeck();
 
     assert.equal(controller.mode, 'deck');
+    assert.equal(controller.aiEnabled, true);
+    assert.equal(stopped, 0);
     assert.equal(controller.turns.has('turn'), true);
     assert.equal(controller.currentItemId, 'turn');
+});
+
+test('manual sound clicks are learned while deck is visible and AI keeps listening', function () {
+    const page = {
+        pageHash: 'character',
+        pageName: 'Персонаж',
+        candidates: [{hash: 'answer', text: 'Ручной ответ'}]
+    };
+    const controller = createController({
+        getPage: function () { return page; },
+        getBlockText: function () { return 'Ручной ответ'; }
+    });
+    controller.mode = 'deck';
+    controller.aiEnabled = true;
+    controller.settings.scenarios = [{id: 'scenario', name: 'Сценарий', prompt: 'План'}];
+    controller.settings.activeScenarioId = 'scenario';
+    controller.currentItemId = 'turn';
+    controller.turns.set('turn', {
+        itemId: 'turn',
+        scenarioId: 'scenario',
+        pageHash: 'character',
+        completed: false,
+        played: new Map()
+    });
+
+    controller.recordPlayed('answer');
+
+    assert.equal(controller.turns.get('turn').played.size, 1);
+    assert.equal(controller.turns.get('turn').played.values().next().value.hash, 'answer');
 });

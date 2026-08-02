@@ -32,6 +32,7 @@ class AiController {
             scenarios: [],
             activeScenarioId: ''
         };
+        this.aiEnabled = false;
         this.captureActive = false;
         this.paused = false;
         this.starting = false;
@@ -227,7 +228,7 @@ class AiController {
     }
 
     async restartScenarioSession() {
-        if (this.mode !== 'ai') {
+        if (!this.aiEnabled) {
             return;
         }
 
@@ -273,7 +274,7 @@ class AiController {
         this.elements.inputDevice.value = selectedId;
 
         if (selectedId && !inputs.some(function (device) { return device.deviceId === selectedId; })) {
-            if (this.mode === 'ai') {
+            if (this.aiEnabled) {
                 await this.stopCapture();
                 this.setStatus('error', 'Выбранный AI-вход отключён');
             }
@@ -285,7 +286,7 @@ class AiController {
             inputDeviceId: this.elements.inputDevice.value
         });
 
-        if (this.mode === 'ai' && !this.paused) {
+        if (this.aiEnabled && !this.paused) {
             await this.restartCapture();
         }
     }
@@ -308,7 +309,7 @@ class AiController {
         this.elements.settingsModal.classList.remove('is-active');
         this.notify('OpenAI API-ключ сохранён', false, 2000);
 
-        if (this.mode === 'ai' && !this.paused) {
+        if (this.aiEnabled && !this.paused) {
             await this.restartCapture();
         }
     }
@@ -320,7 +321,7 @@ class AiController {
 
         this.settings = await this.ipcRenderer.invoke('ai:settings:set', {apiKey: ''});
         await this.refreshSettings();
-        if (this.mode === 'ai') {
+        if (this.aiEnabled) {
             await this.stopCapture();
             this.setStatus('error', 'Добавьте OpenAI API-ключ');
         }
@@ -337,6 +338,7 @@ class AiController {
 
         const generation = ++this.modeGeneration;
         this.mode = 'ai';
+        this.aiEnabled = true;
         this.elements.deck.classList.add('ai-active');
         this.elements.deckTab.classList.remove('is-active');
         this.elements.aiTab.classList.add('is-active');
@@ -357,14 +359,12 @@ class AiController {
             return;
         }
 
-        const generation = ++this.modeGeneration;
+        ++this.modeGeneration;
         this.flushFeedback();
         this.mode = 'deck';
         this.elements.deck.classList.remove('ai-active');
         this.elements.aiTab.classList.remove('is-active');
         this.elements.deckTab.classList.add('is-active');
-        await this.stopCapture();
-        return generation === this.modeGeneration && this.mode === 'deck';
     }
 
     async togglePause() {
@@ -400,12 +400,12 @@ class AiController {
 
     async startCapture() {
         if (this.starting) {
-            if (this.mode === 'ai') {
+            if (this.aiEnabled) {
                 this.restartRequested = true;
             }
             return;
         }
-        if (this.captureActive || this.mode !== 'ai' || this.paused) {
+        if (this.captureActive || !this.aiEnabled || this.paused) {
             return;
         }
 
@@ -447,7 +447,7 @@ class AiController {
                 video: false
             });
 
-            if (this.mode !== 'ai' || generation !== this.captureGeneration ||
+            if (!this.aiEnabled || generation !== this.captureGeneration ||
                 inputDeviceId !== this.settings.inputDeviceId || !this.settings.hasKey) {
                 stream.getTracks().forEach(function (track) { track.stop(); });
                 return;
@@ -471,7 +471,7 @@ class AiController {
                 }
             };
             stream.getAudioTracks()[0].addEventListener('ended', () => {
-                if (this.mode === 'ai') {
+                if (this.aiEnabled) {
                     this.stopCapture();
                     this.setStatus('error', 'Выбранный AI-вход отключён');
                 }
@@ -489,7 +489,7 @@ class AiController {
             this.setStatus('error', this.captureErrorMessage(error));
         } finally {
             this.starting = false;
-            if (this.restartRequested && this.mode === 'ai') {
+            if (this.restartRequested && this.aiEnabled) {
                 this.restartRequested = false;
                 this.startCapture();
             }
@@ -498,7 +498,7 @@ class AiController {
 
     async restartCapture() {
         await this.stopCapture();
-        if (this.mode === 'ai') {
+        if (this.aiEnabled) {
             await this.startCapture();
         }
     }
@@ -633,11 +633,11 @@ class AiController {
         }
 
         if (event.type === 'status') {
-            if (event.status === 'stopped' && this.mode === 'ai' && this.paused) {
+            if (event.status === 'stopped' && this.aiEnabled && this.paused) {
                 this.setStatus('paused');
                 return;
             }
-            if (event.status === 'stopped' && this.mode === 'ai' && this.lastStatus === 'error') {
+            if (event.status === 'stopped' && this.aiEnabled && this.lastStatus === 'error') {
                 return;
             }
             this.setStatus(event.status);
@@ -647,7 +647,7 @@ class AiController {
             this.setStatus('error', this.aiErrorMessage(event.error));
             return;
         }
-        if (this.mode !== 'ai') {
+        if (!this.aiEnabled || this.paused) {
             return;
         }
         if (event.type === 'ranking') {
@@ -917,7 +917,7 @@ class AiController {
     isTurnVisible(turn) {
         const page = this.getPage();
         const scenario = this.activeScenario();
-        return this.mode === 'ai' && !this.paused && this.currentItemId === turn.itemId && page && scenario &&
+        return this.aiEnabled && !this.paused && this.currentItemId === turn.itemId && page && scenario &&
             page.pageHash === turn.pageHash && scenario.id === turn.scenarioId;
     }
 
@@ -997,7 +997,7 @@ class AiController {
     }
 
     recordPlayed(hash) {
-        if (this.mode !== 'ai' || !this.currentItemId) {
+        if (!this.aiEnabled || this.paused || !this.currentItemId) {
             return;
         }
 
@@ -1106,7 +1106,7 @@ class AiController {
     }
 
     async pageChanged() {
-        if (this.mode !== 'ai') {
+        if (!this.aiEnabled) {
             return;
         }
 
@@ -1210,6 +1210,7 @@ class AiController {
 
     async destroy() {
         this.flushFeedback();
+        this.aiEnabled = false;
         this.mode = 'deck';
         await this.stopCapture();
         this.ipcRenderer.removeListener('ai:event', this.onAiEvent);
